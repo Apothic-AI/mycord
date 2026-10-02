@@ -23,17 +23,22 @@ wheels/
 # Testing
 .pytest_cache/
 .coverage
+coverage.xml
 htmlcov/
 .tox/
 
-# Environment
+# Env
 .env
 .env.local
 .venv
 venv/
 ENV/
 
-# IDE
+# Tooling caches
+.ruff_cache/
+.mypy_cache/
+
+# Editors
 .vscode/
 .idea/
 *.swp
