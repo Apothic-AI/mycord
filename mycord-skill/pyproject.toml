@@ -59,6 +59,11 @@ markers = [
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    # discord.py-self still calls asyncio.iscoroutinefunction internally,
+    # which Python 3.14 deprecates. Upstream issue; not actionable here.
+    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning",
+]
 
 [tool.ruff]
 line-length = 100
