@@ -1,4 +1,4 @@
-# mycord-mcp — Discord MCP server
+# mycord-discord-mcp — Discord MCP server
 
 FastMCP server exposing Discord over the Model Context Protocol, backed by
 [`discord.py-self`][dps].
@@ -7,9 +7,9 @@ FastMCP server exposing Discord over the Model Context Protocol, backed by
 > violates Discord's Terms of Service and can get the account permanently
 > banned. Use a throwaway personal account only.
 
-This is the MCP half of the repo. It does **not** depend on `mycord-skill/`; the
+This is the MCP half of the repo. It does **not** depend on `mycord-discord-skill/`; the
 two components are independent. If you want a Python library instead of an MCP
-server, use [`../mycord-skill/`](../mycord-skill/).
+server, use [`../mycord-discord-skill/`](../mycord-discord-skill/).
 
 ## Architecture
 
@@ -25,7 +25,7 @@ mycord/
 ## Install
 
 ```bash
-cd mycord-mcp
+cd mycord-discord-mcp
 uv sync --all-extras
 cp .env.example .env     # fill in DISCORD_TOKEN
 ```

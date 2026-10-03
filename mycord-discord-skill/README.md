@@ -9,7 +9,7 @@ previous one.
 > banned. Use a throwaway personal account only.
 
 This package depends **only** on `discord.py-self` and `python-dotenv`. It does
-not depend on the `mycord-mcp/` FastMCP server in any way.
+not depend on the `mycord-discord-mcp/` FastMCP server in any way.
 
 ## Install
 
@@ -21,7 +21,7 @@ cp .env.example .env     # fill in DISCORD_TOKEN
 To install the agent skill globally from GitHub:
 
 ```bash
-npx skills add Apothic-AI/mycord --skill mycord-repl -g
+npx skills add Apothic-AI/mycord --skill mycord-discord-skill -g
 ```
 
 ## Use

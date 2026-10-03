@@ -1,5 +1,5 @@
 ---
-name: mycord-repl
+name: mycord-discord-skill
 description: Drive a real Discord user account from Python using discord.py-self through a persistent REPL-style session (mycord-repl). Use when asked to read, send, edit, react to, search, or monitor Discord messages, channels, guilds, DMs, or members - as a library, not an MCP server. Relies on selfbot automation, which violates Discord's ToS and can get an account banned.
 ---
 
@@ -15,7 +15,7 @@ instead of writing one giant script.
 > Only use it on a personal account you are willing to lose. Never point it at
 > a shared, work, or customer-facing account.
 
-This skill is **independent of the MCP server** in `mycord-mcp/`. If you were
+This skill is **independent of the MCP server** in `mycord-discord-mcp/`. If you were
 handed this skill, you do not need to start, install, or talk to any MCP server.
 
 For **large** channel or DM histories destined for disk, do not page through
@@ -28,7 +28,7 @@ instead.
 ## The loop
 
 ```bash
-cd mycord-skill
+cd mycord-discord-skill
 uv run mycord-repl start            # logs in; waits for READY
 uv run mycord-repl status           # confirm who you are connected as
 uv run mycord-repl eval "<python>"  # run a snippet; state persists
@@ -195,7 +195,7 @@ to confirm identity, print `client.user.id` instead.
 ## Setup
 
 ```bash
-cd mycord-skill
+cd mycord-discord-skill
 uv sync --all-extras
 cp .env.example .env      # then fill in DISCORD_TOKEN
 ```
@@ -243,7 +243,7 @@ symlink in a directory that is.
 and `ps` output.
 
 ```bash
-cd mycord-skill && set -a && . ./.env && set +a
+cd mycord-discord-skill && set -a && . ./.env && set +a
 
 discordchatexporter export      -c CHANNEL_ID  -o out/ -f Json     # one channel
 discordchatexporter exportguild --guild GUILD_ID -o out/ -f HtmlDark # whole server
@@ -289,9 +289,9 @@ human is going to read it.
 | session hangs | a snippet is blocked; the default eval timeout is 30s, raise with `--timeout` |
 | `timed out` | the awaited call outran its budget; split it or raise `--timeout` |
 
-## Relationship to `mycord-mcp/`
+## Relationship to `mycord-discord-mcp/`
 
-Independent. `mycord-mcp/` exposes a FastMCP server for MCP clients;
-`mycord-skill/` is this Python-library REPL. They share the upstream repo and
+Independent. `mycord-discord-mcp/` exposes a FastMCP server for MCP clients;
+`mycord-discord-skill/` is this Python-library REPL. They share the upstream repo and
 the `discord.py-self` dependency, but neither imports the other. Use whichever
 fits the caller — and never start the MCP server just to use this skill.

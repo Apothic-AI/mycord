@@ -1,0 +1,113 @@
+[build-system]
+requires = ["setuptools>=84.0.0", "wheel>=0.48.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mycord-repl"
+version = "0.1.0"
+description = "Persistent REPL-style session over discord.py-self for agent-driven Discord automation"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "Apothic Team"}
+]
+license = {text = "MIT"}
+keywords = ["discord", "discord.py-self", "repl", "agent", "automation", "selfbot"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+# Deliberately minimal: this component must NOT depend on the mycord MCP
+# server (mycord-discord-mcp/). Agents drive Discord through discord.py-self directly.
+dependencies = [
+    "discord.py-self>=2.1.0",
+    "python-dotenv>=1.2.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.10",
+    "mypy>=2.4.0",
+]
+
+[project.scripts]
+mycord-repl = "mycord_repl.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["mycord_repl*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = [
+    "-v",
+    "--strict-markers",
+]
+markers = [
+    "unit: Unit tests for pure functions and contracts",
+    "integration: Tests that exercise a live daemon over a real socket",
+]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    # discord.py-self still calls asyncio.iscoroutinefunction internally,
+    # which Python 3.14 deprecates. Upstream issue; not actionable here.
+    "ignore:'asyncio.iscoroutinefunction' is deprecated:DeprecationWarning",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "ANN", # flake8-annotations
+    "S",   # flake8-bandit
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "DTZ", # flake8-datetimez
+    "EM",  # flake8-errmsg
+    "G",   # flake8-logging-format
+    "PIE", # flake8-pie
+    "T20", # flake8-print
+    "PT",  # flake8-pytest-style
+    "RUF", # ruff-specific rules
+]
+ignore = [
+    "S101",  # Use of assert (OK in tests)
+    "ANN401", # REPL values are inherently dynamic
+    "N818",  # SessionNotRunning reads better than SessionNotRunningError
+]
+
+[tool.ruff.lint.per-file-ignores]
+# S108: /tmp paths here are string literals for arg parsing, never real files
+"tests/**" = ["S101", "ANN", "PLR2004", "ARG001", "S108"]
+"src/mycord_repl/cli.py" = ["T201", "S112"] # a CLI is supposed to print
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["mycord_repl"]
