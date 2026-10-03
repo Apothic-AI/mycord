@@ -18,6 +18,11 @@ instead of writing one giant script.
 This skill is **independent of the MCP server** in `mycord-mcp/`. If you were
 handed this skill, you do not need to start, install, or talk to any MCP server.
 
+For **large** channel or DM histories destined for disk, do not page through
+`history()` by hand — use the optional
+[DiscordChatExporter](#bulk-export-to-disk-discordchatexporter) dependency
+instead.
+
 ---
 
 ## The loop
@@ -194,6 +199,73 @@ cd mycord-skill
 uv sync --all-extras
 cp .env.example .env      # then fill in DISCORD_TOKEN
 ```
+
+---
+
+## Bulk export to disk (DiscordChatExporter)
+
+**If you are asked to save a large channel or DM history to disk, do not page
+through `history()` in a loop.** Install and use the
+[DiscordChatExporter](https://github.com/Tyrrrz/DiscordChatExporter) CLI
+instead. It is much faster, respects rate limits, preserves attachments, and
+reads the same `DISCORD_TOKEN` you already have.
+
+Split of responsibilities: **the REPL is for reading and reasoning, the exporter
+is for persistence.** Export first, then analyse the file.
+
+> Still a user token, so still ToS-risky — same exposure as the selfbot, no
+> better. The upside is only that it is the supported API surface and does not
+> trip the gateway path that bans come from.
+
+### Install (optional dependency)
+
+The asset name embeds the platform; check the releases page for other targets.
+
+```bash
+cd /tmp
+curl -fsSL -o dce.zip \
+  https://github.com/Tyrrrz/DiscordChatExporter/releases/latest/download/DiscordChatExporter.Cli.linux-x64.zip
+mkdir -p ~/.local/opt/discordchatexporter ~/.local/bin
+unzip -oq dce.zip -d ~/.local/opt/discordchatexporter
+ln -sf ~/.local/opt/discordchatexporter/DiscordChatExporter.Cli ~/.local/bin/discordchatexporter
+chmod +x ~/.local/opt/discordchatexporter/DiscordChatExporter.Cli
+hash -r && discordchatexporter --version
+```
+
+Skip whatever already exists and is current — check `--version` against the
+releases page before reinstalling. If `~/.local/bin` is not on `PATH`, put the
+symlink in a directory that is.
+
+### Export
+
+`--token` falls back to the `DISCORD_TOKEN` environment variable, so load it from
+`.env` instead of passing `-t`. A flag would leak the token into shell history
+and `ps` output.
+
+```bash
+cd mycord-skill && set -a && . ./.env && set +a
+
+discordchatexporter export      -c CHANNEL_ID  -o out/ -f Json     # one channel
+discordchatexporter exportguild --guild GUILD_ID -o out/ -f HtmlDark # whole server
+discordchatexporter exportdm    -o out/ -f Json                      # all DMs
+discordchatexporter exportall   -o out/ -f Csv                       # everything
+```
+
+| Flag | Notes |
+| --- | --- |
+| `-o` | defaults to the **current directory**; a directory path must end in `/` or it is read as a filename |
+| `-f` | `PlainText`, `HtmlDark` (default), `HtmlLight`, `Csv`, `Json` |
+| `--after` / `--before` | accepts a date *or* a message ID |
+| `--media` | downloads attachments, avatars, embeds; add `--reuse-media` to skip re-fetching |
+| `-p` | partition output, e.g. `-p 1000` or `-p 10mb` |
+| `--include-threads` | `None` (default), `Active`, `All` |
+| `--respect-rate-limits` | on by default; leave it on for bulk jobs |
+
+Do not set `DISCORD_TOKEN_BOT` — `-b|--bot` is a backwards-compat no-op, and it
+can shadow the user token you want.
+
+Prefer `Json` when you intend to analyse or re-query the data; `HtmlDark` when a
+human is going to read it.
 
 ## Safety rails
 
