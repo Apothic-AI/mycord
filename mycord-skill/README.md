@@ -18,6 +18,12 @@ uv sync --all-extras
 cp .env.example .env     # fill in DISCORD_TOKEN
 ```
 
+To install the agent skill globally from GitHub:
+
+```bash
+npx skills add Apothic-AI/mycord --skill mycord-repl -g
+```
+
 ## Use
 
 ```bash
