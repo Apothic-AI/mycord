@@ -4,9 +4,6 @@ __pycache__/
 *$py.class
 *.so
 .Python
-# The monorepo root .gitignore excludes .python-version, but these pins must
-# stay tracked or they silently drop out and get deleted by `git subrepo push`.
-!.python-version
 build/
 develop-eggs/
 dist/
