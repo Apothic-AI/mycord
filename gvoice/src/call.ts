@@ -181,15 +181,18 @@ export interface InviteOptions {
   toE164: string;
   /** SDP offer from `buildOffer`. */
   sdp: string;
-  /** Authorization header value from the REGISTER exchange. */
-  auth?: string | undefined;
   /** Opaque per-call From tag. Generated if omitted. */
   fromTag?: string;
   callId?: string;
   branch?: string;
   viaHost?: string;
-  /** `Route` header, verbatim. Omitted when absent. */
-  route?: string | undefined;
+  /**
+   * `Route` headers, verbatim. Route is a list header and the real client sends more
+   * than one on in-dialog requests, so this is an array. Omitted when empty.
+   */
+  routes?: string[] | undefined;
+  /** Contact URI. Defaults to `fromUser` on the local Via host. */
+  contact?: string;
   /** `P-Preferred-Identity`, verbatim. Omitted when absent. */
   preferredIdentity?: string | undefined;
   /** `X-GV-PlaceCallContext`, verbatim. Omitted when absent. */
@@ -209,12 +212,13 @@ export function buildInvite(opts: InviteOptions): string {
     `Via: SIP/2.0/WSS ${viaHost}.invalid:5061;branch=${opts.branch ?? makeBranch()};rport`,
     "Max-Forwards: 70",
   ];
-  if (opts.route) headers.push(`Route: ${opts.route}`);
+  for (const route of opts.routes ?? []) headers.push(`Route: ${route}`);
   headers.push(
     `To: <sip:${opts.toE164}@${SIP_DOMAIN}>`,
     `From: <sip:${opts.fromUser}@${SIP_DOMAIN}>;tag=${fromTag}`,
     `Call-ID: ${callId}`,
     "CSeq: 1 INVITE",
+    `Contact: ${opts.contact ?? `<sip:${opts.fromUser}@${viaHost}.invalid:5061;transport=ws>`}`,
     `Allow: ${REGISTER_STATIC_HEADERS.Allow}`,
     "Content-Type: application/sdp",
     // 100rel is mandatory: the answer arrives on a 183 which must be PRACKed.
@@ -224,41 +228,59 @@ export function buildInvite(opts: InviteOptions): string {
   if (opts.preferredIdentity) headers.push(`P-Preferred-Identity: ${opts.preferredIdentity}`);
   if (opts.placeCallContext) headers.push(`X-GV-PlaceCallContext: ${opts.placeCallContext}`);
   headers.push(`X-Google-Client-Info: ${REGISTER_STATIC_HEADERS["X-Google-Client-Info"]}`);
-  if (opts.auth) headers.push(`Authorization: ${opts.auth}`);
   headers.push(`Content-Length: ${Buffer.byteLength(body, "utf8")}`);
 
   return headers.join(CRLF) + CRLF + CRLF + body;
 }
 
 /** Build the PRACK that acknowledges a `183 Session Progress` (empty body). */
-export function buildPrack(opts: { requestUri: string; from: string; to: string; callId: string; cseq: number; rseq: number }): string {
+export function buildPrack(opts: {
+  requestUri: string;
+  from: string;
+  to: string;
+  callId: string;
+  cseq: number;
+  rseq: number;
+  contact?: string;
+  routes?: string[];
+}): string {
   const viaHost = randomHex(5).toUpperCase().slice(0, 10);
   const lines = [
     `PRACK ${opts.requestUri} SIP/2.0`,
     `Via: SIP/2.0/WSS ${viaHost}.invalid:5061;branch=${makeBranch()};rport`,
     "Max-Forwards: 70",
+  ];
+  for (const r of opts.routes ?? []) lines.push(`Route: ${r}`);
+  lines.push(
     `To: ${opts.to}`,
     `From: ${opts.from}`,
     `Call-ID: ${opts.callId}`,
     `CSeq: ${opts.cseq} PRACK`,
     `RAck: ${opts.rseq} 1 INVITE`,
-    "Content-Length: 0",
-  ];
+  );
+  if (opts.contact) lines.push(`Contact: ${opts.contact}`);
+  lines.push("Content-Length: 0");
   return lines.join(CRLF) + CRLF + CRLF;
 }
 
 /** Build the in-dialog ACK for a 2xx INVITE response (empty body). */
-export function buildAck(opts: { requestUri: string; from: string; to: string; callId: string }): string {
+export function buildAck(opts: {
+  requestUri: string;
+  from: string;
+  to: string;
+  callId: string;
+  contact?: string;
+  routes?: string[];
+}): string {
   const viaHost = randomHex(5).toUpperCase().slice(0, 10);
   const lines = [
     `ACK ${opts.requestUri} SIP/2.0`,
     `Via: SIP/2.0/WSS ${viaHost}.invalid:5061;branch=${makeBranch()};rport`,
     "Max-Forwards: 70",
-    `To: ${opts.to}`,
-    `From: ${opts.from}`,
-    `Call-ID: ${opts.callId}`,
-    "CSeq: 1 ACK",
-    "Content-Length: 0",
   ];
+  for (const r of opts.routes ?? []) lines.push(`Route: ${r}`);
+  lines.push(`To: ${opts.to}`, `From: ${opts.from}`, `Call-ID: ${opts.callId}`, "CSeq: 1 ACK");
+  if (opts.contact) lines.push(`Contact: ${opts.contact}`);
+  lines.push("Content-Length: 0");
   return lines.join(CRLF) + CRLF + CRLF;
 }

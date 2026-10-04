@@ -16,9 +16,9 @@ call signaling over SIP-on-WebSocket. **Everything here runs outside the browser
 | SIP digest auth (RFC 2069 style, MD5, no qop) | ✅ working |
 | `api2thread/sendsms` | ✅ works, but needs a server-issued token (see below) |
 | SDP offer generation + answer parsing | ✅ implemented (`src/call.ts`) |
-| `INVITE` dialog | 🟡 built, not yet placed against the live registrar |
-| 3 GV-proprietary INVITE headers | ⬜ opaque, derivability unknown |
-| DTLS-SRTP media (werift/pion/aiortc) | ⬜ not implemented here |
+| Full `INVITE` dialog (100/183/PRACK/180) | ✅ **working — the call rings** |
+| GV-proprietary INVITE headers | ✅ **not required** — verified unnecessary |
+| DTLS-SRTP media (werift/pion/aiortc) | ⬜ the only missing piece |
 
 ## How it works
 
@@ -79,6 +79,7 @@ pnpm typecheck               # tsc --noEmit (typecheck only; no build step)
 pnpm probe:sip               # fetch SIP creds, REGISTER, report
 pnpm probe:sip GV_VERBOSE=1  # dump raw SIP messages both directions
 pnpm probe:discover          # best-effort refresh of client build/version strings
+pnpm probe:invite <e164>                # place a call, report the SIP dialog
 pnpm probe:sms <e164> "<text>" ./sendsms-capture.json   # replay a captured send
 ```
 
@@ -119,6 +120,31 @@ These each cost real debugging time, so they are worth stating plainly:
   first REGISTER is sent with an empty `nonce=""`/`response=""` probe.
 - **The registrar validates client headers.** `Allow`, `Supported`, `User-Agent`,
   `X-Google-Client-Info` and `Via: …;rport;keep` are all sent by the real client.
+
+### Calling a number works without a browser
+
+```bash
+node src/probe-invite.ts +18002758777
+```
+
+Verified dialog from a plain Node process:
+
+```
+100 Trying -> 183 Session Progress (+SDP) -> 200 OK -> 180 Ringing -> 504
+```
+
+Google answers ICE-lite with a directly routable candidate (`74.125.39.43:26500`) and
+`setup:passive`, so the media stack only has to act as the DTLS client. No candidate
+trickling is needed — our address is learned from outbound STUN.
+
+Three Birdsong headers that a real INVITE carries (`Route` `uri-econt`,
+`P-Preferred-Identity`, `X-GV-PlaceCallContext`) turned out **not to be enforced**; the
+probe omits them and still rings. The `504` is expected because no DTLS follows.
+
+If you extend the dialog, note two things: in-dialog requests must echo the `Record-Route`
+list from the 183 and carry a `Contact`; and parse headers with `parseHeaders()` rather
+than regexes, because a regex that captures the leading CRLF yields a malformed message and
+Google replies `400` with an empty `To:`.
 
 ### SMS send needs a server-issued token
 

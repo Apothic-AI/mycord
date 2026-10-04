@@ -235,6 +235,51 @@ export function makeCallId(): string {
   return randomBytes(16).toString("hex");
 }
 
+/**
+ * Parse a SIP message's headers into a case-insensitive multi-map.
+ *
+ * Prefer this over ad-hoc regexes: a regex like /(^|\r\n)To:(.*)/ captures the leading
+ * CRLF whenever the `^` branch does not match, and injecting that straight into an
+ * outgoing message produces a malformed header (Google answers such a PRACK with a 400
+ * and an empty To:). List headers (Route, Record-Route, Via) legitimately repeat, hence
+ * the array values.
+ */
+export function parseHeaders(message: string): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  const sep = message.indexOf("\r\n\r\n");
+  const block = sep === -1 ? message : message.slice(0, sep);
+  for (const line of block.split("\r\n")) {
+    // Folded continuation lines start with a space/tab; append to the previous header.
+    if (/^[ \t]/.test(line) && out.size > 0) {
+      const keys = [...out.keys()];
+      const lastKey = keys[keys.length - 1];
+      if (lastKey) {
+        const arr = out.get(lastKey);
+        if (arr) arr[arr.length - 1] = `${arr[arr.length - 1]} ${line.trim()}`;
+      }
+      continue;
+    }
+    const idx = line.indexOf(":");
+    if (idx <= 0) continue; // request/status line, or malformed
+    const name = line.slice(0, idx).trim().toLowerCase();
+    const value = line.slice(idx + 1).trim();
+    const arr = out.get(name);
+    if (arr) arr.push(value);
+    else out.set(name, [value]);
+  }
+  return out;
+}
+
+/** First value of a header, or undefined. */
+export function header(message: string, name: string): string | undefined {
+  return parseHeaders(message).get(name.toLowerCase())?.[0];
+}
+
+/** All values of a possibly-repeated header. */
+export function headers(message: string, name: string): string[] {
+  return parseHeaders(message).get(name.toLowerCase()) ?? [];
+}
+
 /** Split a buffer that may contain several concatenated SIP messages. */
 export function splitMessages(raw: string): string[] {
   const out: string[] = [];
