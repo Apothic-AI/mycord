@@ -39,16 +39,23 @@ import {
   type RemoteDescription,
 } from "./call.ts";
 import { SIP_DOMAIN } from "./sip.ts";
+import { MediaPlane } from "./media.ts";
 
 export interface PlaceCallOptions {
   /** Callee in E.164, e.g. "+18002758777". */
   toE164: string;
   /**
-   * DTLS certificate fingerprint for the media stack, colon-separated uppercase hex.
-   * Must match the certificate actually used for the DTLS handshake.
+   * Media plane to use. When supplied its offer is used and its answer is applied, so the
+   * SDP and the DTLS certificate always agree. When omitted, signalling proceeds with a
+   * hand-built offer and no media — useful for probing the dialog only.
    */
-  fingerprint: string;
-  /** Optional overrides for the SDP offer. */
+  media?: MediaPlane | undefined;
+  /**
+   * DTLS fingerprint for the hand-built offer. Only used when `media` is absent; it must
+   * match the certificate actually presented during the DTLS handshake.
+   */
+  fingerprint?: string | undefined;
+  /** Optional overrides for the SDP offer (hand-built path only). */
   sdp?: Parameters<typeof buildOffer>[0] | undefined;
   /**
    * GV-proprietary headers, verbatim from a real client exchange. Omitted by default —
@@ -62,6 +69,8 @@ export interface PlaceCallOptions {
 export interface PlaceCallResult {
   /** Answer SDP from the 183, if one arrived. */
   answer?: RemoteDescription;
+  /** The media plane in use, when one was supplied. */
+  media?: MediaPlane;
   /** Final response line for the INVITE, e.g. "SIP/2.0 200 OK". */
   finalResponse?: string;
   /** Every status line seen, in order. */
@@ -220,10 +229,14 @@ export class SipSession {
 
     // The real client uses a short opaque token here, distinct from the REGISTER credential.
     // Reusing the credential is the conservative choice until that is understood.
+    const sdp = opts.media
+      ? await opts.media.createOffer()
+      : buildOffer({ fingerprint: opts.fingerprint ?? "", ...opts.sdp });
+
     const invite = buildInvite({
       fromUser: sipUser,
       toE164: opts.toE164,
-      sdp: buildOffer({ fingerprint: opts.fingerprint, ...opts.sdp }),
+      sdp,
       fromTag,
       callId,
       viaHost: this.viaHost,
@@ -233,7 +246,7 @@ export class SipSession {
       placeCallContext: opts.placeCallContext,
     });
 
-    const result: PlaceCallResult = { responses: [] };
+    const result: PlaceCallResult = { responses: [], ...(opts.media ? { media: opts.media } : {}) };
     const timeout = this.opts.callTimeoutMs ?? 45_000;
 
     return await new Promise<PlaceCallResult>((resolve, reject) => {
@@ -263,8 +276,15 @@ export class SipSession {
 
         if (line.startsWith("SIP/2.0 183")) {
           const rseq = Number(h.get("rseq")?.[0] ?? "1");
-          const sdp = extractSdp(msg);
-          if (sdp) result.answer = parseAnswer(sdp);
+          const answerSdp = extractSdp(msg);
+          if (answerSdp) {
+            result.answer = parseAnswer(answerSdp);
+            // Apply the answer immediately so ICE/DTLS can run in parallel with the
+            // PRACK round-trip rather than waiting for the 2xx.
+            void opts.media?.applyAnswer(answerSdp).catch((err: unknown) => {
+              this.mediaError = err instanceof Error ? err.message : String(err);
+            });
+          }
           // 183 must be PRACKed (Require: 100rel) before the call proceeds.
           this.ws?.send(
             buildPrack({
@@ -314,6 +334,8 @@ export class SipSession {
   private dialogHandler?: (msg: string) => void;
   /** Record-Route set learned from the dialog, echoed on in-dialog requests. */
   private routes: string[] = [];
+  /** Set if applying the remote answer threw, so callers can surface it. */
+  mediaError?: string;
 
   /** Tear the call (and the session) down. */
   bye(): void {

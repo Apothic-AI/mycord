@@ -18,7 +18,9 @@ call signaling over SIP-on-WebSocket. **Everything here runs outside the browser
 | SDP offer generation + answer parsing | ✅ implemented (`src/call.ts`) |
 | Full `INVITE` dialog (100/183/PRACK/180) | ✅ **working — the call rings** |
 | GV-proprietary INVITE headers | ✅ **not required** — verified unnecessary |
-| DTLS-SRTP media (werift/pion/aiortc) | ⬜ the only missing piece |
+| werift media plane (ICE + DTLS-SRTP + RTP) | ✅ **DTLS handshake completes** |
+| Inbound opus reception (RX audio) | ⬜ needs a callee that actually answers |
+| Outbound opus injection (TX audio) | 🟡 transport proven; payload encoding not wired |
 
 ## How it works
 
@@ -80,6 +82,7 @@ pnpm probe:sip               # fetch SIP creds, REGISTER, report
 pnpm probe:sip GV_VERBOSE=1  # dump raw SIP messages both directions
 pnpm probe:discover          # best-effort refresh of client build/version strings
 pnpm probe:invite <e164>                # place a call, report the SIP dialog
+pnpm probe:media <e164> [secs] [--tx]   # place a call and verify media
 pnpm probe:sms <e164> "<text>" ./sendsms-capture.json   # replay a captured send
 ```
 
@@ -145,6 +148,39 @@ If you extend the dialog, note two things: in-dialog requests must echo the `Rec
 list from the 183 and carry a `Contact`; and parse headers with `parseHeaders()` rather
 than regexes, because a regex that captures the leading CRLF yields a malformed message and
 Google replies `400` with an empty `To:`.
+
+### Media plane (werift)
+
+`src/media.ts` wraps werift and covers the whole media stack:
+
+```bash
+node src/probe-media.ts +18002758777 20 [--tx]
+```
+
+Measured against the live registrar:
+
+```
+ice           : connected      iceGatheringState: complete
+dtlsState     : connected      iceRole: controlling
+outbound pkts : 4              (DTMF, written over the encrypted transport)
+inbound pkts  : 0
+```
+
+**DTLS completes**, so the self-signed certificate is accepted, SRTP keys are derived, and
+the transport carries RTP both ways. Zero inbound packets is not a transport fault — the
+800 line rang out (`504`), and Google only sends media to an answered call.
+
+Two interop details that are easy to get wrong:
+
+- **Payload type must be 111.** werift's default audio offer advertises PT 96/0, and Google's
+  answer picks from what we offer, so the codec list has to be overridden or nothing
+  negotiates.
+- **werift needs a real track to send on.** `addTransceiver('audio')` leaves
+  `sender.track` undefined and there is nothing to write RTP to; create one with
+  `MediaStreamTrackFactory.rtpSource({ kind: 'audio' })` and attach that.
+
+`inbound` payloads arrive as raw opus frames, not PCM — decode with an opus decoder if you
+want samples.
 
 ### SMS send needs a server-issued token
 
