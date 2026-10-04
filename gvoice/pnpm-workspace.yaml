@@ -1,0 +1,8 @@
+# Makes this directory its own pnpm workspace root.
+#
+# Required because tooling/mycord is a git subrepo (Apothic-AI/mycord). Without this,
+# pnpm walks up, finds the monorepo root workspace, and records our dependencies in the
+# monorepo root pnpm-lock.yaml — a file that does not travel with the subrepo, so the
+# subrepo would ship without a lockfile and be non-reproducible.
+packages:
+  - "."

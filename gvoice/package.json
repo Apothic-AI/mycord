@@ -1,0 +1,26 @@
+{
+  "name": "gvoice",
+  "version": "0.1.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "probe:sip": "node src/probe-sip.ts",
+    "probe:discover": "node src/probe-discover.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.4",
+    "@types/ws": "^8.18.2",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.18"
+  }
+}
