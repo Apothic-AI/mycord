@@ -15,7 +15,10 @@ call signaling over SIP-on-WebSocket. **Everything here runs outside the browser
 | SIP REGISTER against the live registrar (`200 OK`) | ✅ working |
 | SIP digest auth (RFC 2069 style, MD5, no qop) | ✅ working |
 | `api2thread/sendsms` | ✅ works, but needs a server-issued token (see below) |
-| `INVITE` / SDP offer-answer / DTLS-SRTP media | ⬜ not implemented here |
+| SDP offer generation + answer parsing | ✅ implemented (`src/call.ts`) |
+| `INVITE` dialog | 🟡 built, not yet placed against the live registrar |
+| 3 GV-proprietary INVITE headers | ⬜ opaque, derivability unknown |
+| DTLS-SRTP media (werift/pion/aiortc) | ⬜ not implemented here |
 
 ## How it works
 
