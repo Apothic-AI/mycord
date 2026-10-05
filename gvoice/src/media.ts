@@ -163,6 +163,7 @@ export class MediaPlane {
     plane.disposeOutbound = dispose;
     pc.addTransceiver(track, { direction: "sendrecv" });
 
+    plane.watchRawInbound(pc);
     return plane;
   }
 
@@ -229,6 +230,13 @@ export class MediaPlane {
 
     this.inboundTrack = wildcard;
     this.learnInboundSsrc(receiver, wildcard);
+
+    // Subscribe directly rather than going through attachInbound(): if pc.onTrack already
+    // fired for werift's own SSRC-keyed track, attachInbound() would early-return on
+    // inboundAttached and the wildcard would never be subscribed — which looks exactly
+    // like "no media" even though werift is receiving fine.
+    wildcard.onReceiveRtp.subscribe((rtp: RtpPacket) => this.handleInboundRtp(rtp));
+    this.inboundAttached = true;
     this.attachInbound();
     return true;
   }
@@ -326,6 +334,27 @@ export class MediaPlane {
   private inboundAttached = false;
   /** SSRC learned from the first inbound packet, if any. */
   learnedSsrc?: number;
+
+  /**
+   * Diagnostic counters for the inbound path.
+   *
+   * `raw` counts datagrams off the ICE connection, i.e. before DTLS/SRTP. Comparing `raw`
+   * against `inbound.packets` tells you whether the loss is at the ICE layer (raw stays 0)
+   * or in SRTP unprotect / receiver routing (raw climbs, inbound does not).
+   */
+  readonly raw = { datagrams: 0, bytes: 0 };
+
+  private watchRawInbound(pc: RTCPeerConnection): void {
+    const ice = pc.iceTransports?.[0] as unknown as {
+      connection?: { onData?: { subscribe: (fn: (buf: Buffer) => void) => unknown } };
+    };
+    const onData = ice?.connection?.onData;
+    if (typeof onData?.subscribe !== "function") return;
+    onData.subscribe((buf: Buffer) => {
+      this.raw.datagrams += 1;
+      this.raw.bytes += buf?.length ?? 0;
+    });
+  }
 
   /**
    * Subscribe to whichever track actually receives.
@@ -448,8 +477,16 @@ export class MediaPlane {
   }
 
   /** Timed stats, for verifying the media path actually carries audio. */
-  stats(): { inbound: InboundStats; outboundPackets: number; outboundBytes: number; connection: string; ice: string } {
+  stats(): {
+    inbound: InboundStats;
+    outboundPackets: number;
+    outboundBytes: number;
+    connection: string;
+    ice: string;
+    raw: { datagrams: number; bytes: number };
+  } {
     return {
+      raw: { datagrams: this.raw.datagrams, bytes: this.raw.bytes },
       inbound: {
         packets: this.inboundPackets,
         bytes: this.inboundBytes,

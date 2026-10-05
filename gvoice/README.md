@@ -19,7 +19,7 @@ call signaling over SIP-on-WebSocket. **Everything here runs outside the browser
 | Full `INVITE` dialog (100/183/PRACK/180) | ✅ **working — the call rings** |
 | GV-proprietary INVITE headers | ✅ **not required** — verified unnecessary |
 | werift media plane (ICE + DTLS-SRTP + RTP) | ✅ **DTLS handshake completes** |
-| Inbound audio via werift | ❌ GV sends no RTP to the werift peer (see below) |
+| Inbound audio via werift | ❌ receives 98 KB, delivers 0 (SRTP, see below) |
 | Inbound audio via headless-Chrome media host | ✅ proven: 5.28 M samples extracted |
 | Opus encode/decode, TX injection, RX decode | ✅ implemented and verified locally |
 
@@ -197,47 +197,47 @@ there, so a requested bitrate is honoured only in the sense that the frame size 
 
 Measured round-trip of a 440 Hz tone: 119-byte packet, decoded peak 1.29, rms 0.32.
 
-### Known werift interop gap (inbound)
+### Known werift interop gap (inbound) — measured, not guessed
 
-werift does not currently receive audio from Google Voice. A packet capture pins down how
-far the media path actually gets.
-
-**What reaches us, verified with tcpdump during a live call:**
+Google Voice **does** send audio to a werift peer; werift throws it away. Verified with an
+answered call to `1-800-FLOWERS` (`200 OK`, no ringing, so the IVR picked up) plus two
+independent measurements:
 
 ```
-udp port 26500  →  1647 inbound packets
-  all IPv4 after pinning (see below)
-  payload first bytes: 01 01 00 44 21 12 a4 42 …   <- STUN magic cookie 0x2112A442
+tcpdump, udp port 26500   -> 1257 inbound to our single ICE port (54797)
+                             lengths vary 42..84 bytes  => variable-size RTP audio
+                             only 7 of 1258 carry the STUN magic cookie
+
+MediaPlane.stats()         -> raw ICE dgrams: 1389  (98,827 bytes, pre-SRTP)
+                               inbound pkts  : 0
+                               outbound pkts : 1096
 ```
 
-Every inbound packet is a **STUN Binding Success Response** (message type `0x0101`), not RTP.
-So Google completes ICE and keeps answering our checks, but sends **zero media**.
-
-**What is proven working browser-free:** SIP REGISTER, the full INVITE dialog
-(100 / 183 / PRACK / 180 / 200 / ACK / BYE), ICE connected, DTLS connected with negotiated
-SRTP profiles (`[7, 1]`), and 1000+ SRTP-protected opus packets delivered to Google's media
-address.
+So werift's ICE layer receives all 98.8 KB and delivers **zero** bytes. The loss is strictly
+after ICE: DTLS reports `connected` with SRTP profiles `[7, 1]` negotiated, but inbound
+unprotect/routing discards every packet. A local werift loopback still receives fine in both
+roles, so it is specific to this peer.
 
 **Ruled out along the way:**
 
-- werift's own pipeline — a local loopback receives fine in both roles, offerer included.
-- Google's answer lacking `a=ssrc:` — worked around with `ensureSsrcLines()`; werift's
-  `trackBySSRC[ssrc]` miss silently dropping packets is worked around by
-  `wireWildcardReceive()` plus a `handleRtpBySsrc` wrapper.
-- The ICE address family — Google offered both, werift gathered both, and a capture showed
-  1615 of 1623 inbound packets on **IPv6** while the DTLS handshake ran on IPv4, so the two
-  sides disagreed about which pair carried media. `MediaPlaneOptions.useIpv6` now pins one
-  family (IPv4 by default) and `dropIPv6Candidates()` strips the other from the answer.
-- The three Birdsong headers, at the SIP layer — a call rings and is answered without them,
-  and replaying captured values changed nothing.
+- The werift pipeline generally — loopback receives in both roles, offerer included.
+- Google's answer lacking `a=ssrc:` — `ensureSsrcLines()` works around werift creating no
+  receiver track at all, and `wireWildcardReceive()` plus a `handleRtpBySsrc` wrapper defeat
+  werift's `trackBySSRC[ssrc]` miss silently dropping packets.
+- ICE address family — a capture showed 1615 of 1623 inbound packets on IPv6 while DTLS ran
+  on IPv4, so `useIpv6` now pins one family and `dropIPv6Candidates()` strips the other.
+- The three Birdsong headers at the SIP layer — calls ring and are answered without them.
+- The callee not answering — settled by the FLOWERS call.
 
-**What remains:** Google answers STUN but never bridges media. Either these test calls are
-never actually answered at the PSTN leg (they end `504`), or Google's media service needs
-something beyond SIP signalling that the web client sends — plausibly an authenticated step
-through the proprietary `X-Google-*` RPC surface rather than a SIP header.
+**Workaround path, if this is worth pursuing:** werift exports `SrtpSession.decrypt()` and
+`SrtpContext(masterKey, masterSalt, profile)`. Since `MediaPlane` already sees the raw
+pre-SRTP datagrams via the ICE connection's `onData`, the inbound keys could be pulled out of
+werift's DTLS state and packets decrypted outside werift. That is real work and is the only
+route to a pure-Node receive path.
 
-werift's `getStats()` returns an empty array until `collectStats()` runs, so packet capture
-(`tcpdump -i wlan0 -n 'udp port 26500'`) is the reliable way to tell media from keepalive.
+Otherwise the working configuration is the hybrid: Node for all signalling and control,
+headless Chrome as the media host — verified to extract real call audio with no virtual
+audio device.
 
 ### SMS send needs a server-issued token
 

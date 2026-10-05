@@ -136,6 +136,7 @@ console.log(`connection    : ${stats.connection}`);
 console.log(`inbound pkts  : ${stats.inbound.packets} (opus ${inboundOpus}, other ${inboundOther})`);
 console.log(`inbound bytes : ${stats.inbound.bytes}`);
 if (media.learnedSsrc !== undefined) console.log(`learned ssrc  : ${media.learnedSsrc}`);
+console.log(`raw ICE dgrams: ${stats.raw.datagrams} (${stats.raw.bytes} bytes, pre-SRTP)`);
 console.log(`outbound pkts : ${stats.outboundPackets} (${toneFrames} opus tone frames + 4 DTMF)`);
 console.log(`since first   : ${(stats.inbound.elapsedMs / 1000).toFixed(1)}s`);
 if (lastInbound) console.log(`last inbound  : ${((Date.now() - lastInbound) / 1000).toFixed(1)}s ago`);
