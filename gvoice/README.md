@@ -19,8 +19,8 @@ call signaling over SIP-on-WebSocket. **Everything here runs outside the browser
 | Full `INVITE` dialog (100/183/PRACK/180) | ✅ **working — the call rings** |
 | GV-proprietary INVITE headers | ✅ **not required** — verified unnecessary |
 | werift media plane (ICE + DTLS-SRTP + RTP) | ✅ **DTLS handshake completes** |
-| Inbound opus reception (RX audio) | ⬜ needs a callee that actually answers |
-| Outbound opus injection (TX audio) | 🟡 transport proven; payload encoding not wired |
+| Inbound audio observed on a real call | ⬜ needs a callee that actually answers |
+| Opus encode/decode, TX injection, RX decode | ✅ implemented and verified locally |
 
 ## How it works
 
@@ -179,8 +179,22 @@ Two interop details that are easy to get wrong:
   `sender.track` undefined and there is nothing to write RTP to; create one with
   `MediaStreamTrackFactory.rtpSource({ kind: 'audio' })` and attach that.
 
-`inbound` payloads arrive as raw opus frames, not PCM — decode with an opus decoder if you
-want samples.
+### Opus (`src/audio.ts`)
+
+`opus/48000/2` at payload type 111, 20 ms frames of 960 samples, mono internally and
+duplicated stereo by the RTP layer.
+
+Two packages because neither does both jobs well: **encode** via `opusscript`, **decode**
+via `opus-decoder` (wasm). `opus-decoder`'s `decodeFrame` resolves to an object with
+`channelData`, not a bare channel array.
+
+**The trap:** opusscript's encoder takes **Int16** PCM. Passing Float32 in the usual ±1.0
+range silently encodes near-silence — the packet comes out 57 B instead of 120 B and decodes
+to a peak of 0.00006. Scale by 32767 and clamp. Also note `encoderCTL` is unimplemented
+there, so a requested bitrate is honoured only in the sense that the frame size you pass to
+`encode()` is what actually matters.
+
+Measured round-trip of a 440 Hz tone: 119-byte packet, decoded peak 1.29, rms 0.32.
 
 ### SMS send needs a server-issued token
 

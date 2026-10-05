@@ -13,6 +13,8 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "opus-decoder": "^0.7.12",
+    "opusscript": "^0.1.1",
     "werift": "^0.24.4",
     "ws": "^8.22.0"
   },
