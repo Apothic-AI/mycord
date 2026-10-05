@@ -70,6 +70,7 @@ console.log(`calling ${toE164} with media attached\n`);
 const result = await session.placeCall({ toE164, media });
 
 console.log(`\nSIP: ${result.responses.join("  ")}`);
+if (session.mediaError) console.log(`\n!! applyAnswer failed: ${session.mediaError}`);
 if (result.answer) {
   console.log(`answer: ${result.answer.rtpmap[111] ?? "?"} port=${result.answer.audioPort} candidates=${result.answer.candidates.length}`);
 } else {
@@ -114,6 +115,9 @@ while (Date.now() < deadline) {
   if (s.inbound.packets > 200) break;
 }
 
+// werift's getStats() returns an empty array until collectStats() is called,
+// so it is not useful for diagnosing inbound traffic here.
+
 console.log("\n=== transport diagnostics ===");
 console.log(JSON.stringify(await media.diagnostics(), null, 1));
 
@@ -123,6 +127,7 @@ console.log(`ice           : ${stats.ice}`);
 console.log(`connection    : ${stats.connection}`);
 console.log(`inbound pkts  : ${stats.inbound.packets} (opus ${inboundOpus}, other ${inboundOther})`);
 console.log(`inbound bytes : ${stats.inbound.bytes}`);
+if (media.learnedSsrc !== undefined) console.log(`learned ssrc  : ${media.learnedSsrc}`);
 console.log(`outbound pkts : ${stats.outboundPackets} (${toneFrames} opus tone frames + 4 DTMF)`);
 console.log(`since first   : ${(stats.inbound.elapsedMs / 1000).toFixed(1)}s`);
 if (lastInbound) console.log(`last inbound  : ${((Date.now() - lastInbound) / 1000).toFixed(1)}s ago`);

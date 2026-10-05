@@ -19,7 +19,8 @@ call signaling over SIP-on-WebSocket. **Everything here runs outside the browser
 | Full `INVITE` dialog (100/183/PRACK/180) | ✅ **working — the call rings** |
 | GV-proprietary INVITE headers | ✅ **not required** — verified unnecessary |
 | werift media plane (ICE + DTLS-SRTP + RTP) | ✅ **DTLS handshake completes** |
-| Inbound audio observed on a real call | ⬜ needs a callee that actually answers |
+| Inbound audio via werift | ❌ GV sends no RTP to the werift peer (see below) |
+| Inbound audio via headless-Chrome media host | ✅ proven: 5.28 M samples extracted |
 | Opus encode/decode, TX injection, RX decode | ✅ implemented and verified locally |
 
 ## How it works
@@ -195,6 +196,30 @@ there, so a requested bitrate is honoured only in the sense that the frame size 
 `encode()` is what actually matters.
 
 Measured round-trip of a 440 Hz tone: 119-byte packet, decoded peak 1.29, rms 0.32.
+
+### Known werift interop gap (inbound)
+
+werift does not currently receive audio from Google Voice, and the cause is not yet pinned
+down. What is established:
+
+- A local werift↔werift loopback works in both roles — the offerer receives fine (20 packets),
+  so the pipeline and the receiver wiring are sound.
+- Google's answer SDP is minimal and **contains no `a=ssrc:` lines**. werift only creates a
+  receiver track when it can key it by an SSRC, so it accepts the answer, reports
+  `receiver tracks: 0`, and drops everything. `ensureSsrcLines()` works around that.
+- werift routes inbound RTP by bare `trackBySSRC[ssrc]` lookup and passes `undefined`
+  through on a miss, so an unknown SSRC is silently discarded. `wireWildcardReceive()` plus a
+  `handleRtpBySsrc` wrapper let the first inbound packet register its own SSRC.
+- Even with both workarounds, **no packet reaches the receiver** — the SSRC-learning shim
+  never fires even though `dtlsState` reports `connected` and 29 packets are transmitted.
+  So Google is either not sending, or its SRTP is not being unprotected. werift's
+  `getStats()` returns an empty array until `collectStats()` is called, which removes the
+  usual visibility for telling those apart.
+
+Options: debug werift's SRTP path, or switch the media stack (pion in Go, aiortc in Python)
+— but note that reintroduces a non-Node runtime. The pragmatic working configuration today
+is Node for all signalling and control with a headless Chrome as the media host, which is
+verified to extract real call audio.
 
 ### SMS send needs a server-issued token
 
