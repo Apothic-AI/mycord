@@ -19,7 +19,9 @@ call signaling over SIP-on-WebSocket. **Everything here runs outside the browser
 | Full `INVITE` dialog (100/183/PRACK/180) | ✅ **working — the call rings** |
 | GV-proprietary INVITE headers | ✅ **not required** — verified unnecessary |
 | werift media plane (ICE + DTLS-SRTP + RTP) | ✅ **DTLS handshake completes** |
-| Inbound audio, pure Node | ✅ **438 opus frames decoded, peak 0.16** |
+| Inbound audio, pure Node | ✅ **1852 opus frames decoded, peak 0.66** |
+| Outbound synthesized speech | ✅ **211 opus frames, real-time paced** |
+| Two-way speech, no audio device | ✅ `node src/probe-voice.ts +18003569377` |
 | Inbound audio via headless-Chrome media host | ✅ proven: 5.28 M samples extracted |
 | Opus encode/decode, TX injection, RX decode | ✅ implemented and verified locally |
 
@@ -237,6 +239,52 @@ Earlier findings that still matter, since each cost real time:
   without one. `ensureSsrcLines()` covers that for werift's own path.
 - **opus encoding takes Int16, not Float32** — see the section above.
 - **The three Birdsong headers are not required** for signalling or media.
+
+### Two-way speech (`src/probe-voice.ts`)
+
+`src/tts.ts` turns text into 48 kHz mono Float32 via a swappable backend
+(`speak(text) -> Float32Array @ 48 kHz`), and `SpeechSender` streams it into a live call as
+opus frames paced at real time.
+
+Two details that mattered:
+
+- **Real-time pacing is not optional.** Dumping a whole utterance as fast as possible
+  overruns the far end's jitter buffer and the opening words never arrive. `SpeechSender`
+  emits one 20 ms frame every 20 ms.
+- **"Quiet" means quiet, not "no packets".** The first version waited for a gap in inbound
+  packets before speaking. It never fired: the far end streams frames continuously, so the
+  gap never appears. The trigger now watches inbound *loudness* (rolling RMS) instead.
+
+Default backend is `espeak-ng` — local, offline, no credentials, and robotic. It is there to
+prove the loop; swap in a neural voice without touching the call path:
+
+```ts
+new CommandTtsBackend("edge-tts", ["--voice", "en-US-Aria", "--text"])
+```
+
+espeak-ng emits 22.05 kHz mono s16 WAV, so `ffmpeg` resamples to the 48 kHz that
+`opus/48000/2` needs.
+
+Run it and watch the far end answer:
+
+```
+$ node src/probe-voice.ts +18003569377 "Please say the digit one."
+
+inbound frames  : 1852 (37.0s)
+peak amplitude  : 0.6114
+outbound pkts   : 211
+raw ICE dgrams  : 1862 (decrypt ok=1852 fail=8)
+
+far-end audio timeline (1s buckets, bar = peak amplitude):
+  t+ 2s |#################                       | 0.412   <- far-end greeting
+  t+ 5s |                                          | 0.000  <-- we start speaking
+  t+ 6s |##################                        | 0.455
+  t+10s |##################                        | 0.452  <-- we stop speaking
+  t+30s |#######################                   | 0.580   <- far end replies
+```
+
+The `t+30s` burst after we stop talking is the IVR responding — the loop is genuinely
+bidirectional, with no audio device, no browser, and no virtual sound card anywhere.
 
 ### SMS send needs a server-issued token
 
