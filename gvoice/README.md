@@ -19,7 +19,7 @@ call signaling over SIP-on-WebSocket. **Everything here runs outside the browser
 | Full `INVITE` dialog (100/183/PRACK/180) | ✅ **working — the call rings** |
 | GV-proprietary INVITE headers | ✅ **not required** — verified unnecessary |
 | werift media plane (ICE + DTLS-SRTP + RTP) | ✅ **DTLS handshake completes** |
-| Inbound audio via werift | ❌ receives 98 KB, delivers 0 (SRTP, see below) |
+| Inbound audio, pure Node | ✅ **438 opus frames decoded, peak 0.16** |
 | Inbound audio via headless-Chrome media host | ✅ proven: 5.28 M samples extracted |
 | Opus encode/decode, TX injection, RX decode | ✅ implemented and verified locally |
 
@@ -197,47 +197,46 @@ there, so a requested bitrate is honoured only in the sense that the frame size 
 
 Measured round-trip of a 440 Hz tone: 119-byte packet, decoded peak 1.29, rms 0.32.
 
-### Known werift interop gap (inbound) — measured, not guessed
+### The werift inbound bug, and the fix
 
-Google Voice **does** send audio to a werift peer; werift throws it away. Verified with an
-answered call to `1-800-FLOWERS` (`200 OK`, no ringing, so the IVR picked up) plus two
-independent measurements:
+Google Voice **does** send audio, and werift's SRTP keys were always correct — werift was
+throwing the packets away before decrypting them.
+
+**Root cause.** werift classifies an inbound datagram as RTP only if its first byte is in
+`(127, 192)`, the range of an RTP version-2 header. Google Voice's datagrams arrive with a
+first byte of **`0xF7`**, which fails that test, so werift routes them into its RTCP handler
+where the RTCP parse fails and the packet is discarded — no exception, no log, no counter.
+That is why `SrtpSession.decrypt` was never called even though 98 KB had arrived.
+
+**Proof the keys were fine.** Feeding those same datagrams to werift's own `SrtpSession`
+produced `80 6f 00 10 00003c00 5776e382` — version 2, **payload type 111 (opus)**, sequence
+16, timestamp 15360 (320 samples = 20 ms at 48 kHz), with a valid SSRC.
+
+**Fix.** Take the raw datagrams off the ICE connection, decrypt with the DTLS transport's
+existing SRTP session, and hand the RTP to subscribers directly. Inbound path in
+`MediaPlane.watchRawInbound`, which counts every stage:
 
 ```
-tcpdump, udp port 26500   -> 1257 inbound to our single ICE port (54797)
-                             lengths vary 42..84 bytes  => variable-size RTP audio
-                             only 7 of 1258 carry the STUN magic cookie
-
-MediaPlane.stats()         -> raw ICE dgrams: 1389  (98,827 bytes, pre-SRTP)
-                               inbound pkts  : 0
-                               outbound pkts : 1096
+raw ICE dgrams: 443 (32,723 bytes, pre-SRTP)
+  srtp decrypt ok=439 fail=2 | non-rtp=0 rtp-parse-fail=0
+inbound pkts  : 439 (opus 439, other 0)
+peak amplitude: 0.1605    mean rms: 0.02272
 ```
 
-So werift's ICE layer receives all 98.8 KB and delivers **zero** bytes. The loss is strictly
-after ICE: DTLS reports `connected` with SRTP profiles `[7, 1]` negotiated, but inbound
-unprotect/routing discards every packet. A local werift loopback still receives fine in both
-roles, so it is specific to this peer.
+Two `SrtpAuthenticationError`s out of 443 are normal (a stray or truncated packet mid-flight).
 
-**Ruled out along the way:**
+A neater long-term fix is to patch werift's `isMedia` to accept these packets, but routing
+them ourselves is explicit and does not depend on werift internals.
 
-- The werift pipeline generally — loopback receives in both roles, offerer included.
-- Google's answer lacking `a=ssrc:` — `ensureSsrcLines()` works around werift creating no
-  receiver track at all, and `wireWildcardReceive()` plus a `handleRtpBySsrc` wrapper defeat
-  werift's `trackBySSRC[ssrc]` miss silently dropping packets.
-- ICE address family — a capture showed 1615 of 1623 inbound packets on IPv6 while DTLS ran
-  on IPv4, so `useIpv6` now pins one family and `dropIPv6Candidates()` strips the other.
-- The three Birdsong headers at the SIP layer — calls ring and are answered without them.
-- The callee not answering — settled by the FLOWERS call.
+Earlier findings that still matter, since each cost real time:
 
-**Workaround path, if this is worth pursuing:** werift exports `SrtpSession.decrypt()` and
-`SrtpContext(masterKey, masterSalt, profile)`. Since `MediaPlane` already sees the raw
-pre-SRTP datagrams via the ICE connection's `onData`, the inbound keys could be pulled out of
-werift's DTLS state and packets decrypted outside werift. That is real work and is the only
-route to a pure-Node receive path.
-
-Otherwise the working configuration is the hybrid: Node for all signalling and control,
-headless Chrome as the media host — verified to extract real call audio with no virtual
-audio device.
+- **ICE address family** — Google offered both IPv4 and IPv6, werift gathered both, and a
+  capture showed 1615 of 1623 inbound packets on IPv6 while DTLS ran on IPv4. `useIpv6` pins
+  one family; `dropIPv6Candidates()` strips the other from the answer.
+- **`a=ssrc` in the answer** — Google omits it, and werift creates no receiver track at all
+  without one. `ensureSsrcLines()` covers that for werift's own path.
+- **opus encoding takes Int16, not Float32** — see the section above.
+- **The three Birdsong headers are not required** for signalling or media.
 
 ### SMS send needs a server-issued token
 

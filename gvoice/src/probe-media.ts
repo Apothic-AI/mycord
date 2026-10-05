@@ -137,6 +137,9 @@ console.log(`inbound pkts  : ${stats.inbound.packets} (opus ${inboundOpus}, othe
 console.log(`inbound bytes : ${stats.inbound.bytes}`);
 if (media.learnedSsrc !== undefined) console.log(`learned ssrc  : ${media.learnedSsrc}`);
 console.log(`raw ICE dgrams: ${stats.raw.datagrams} (${stats.raw.bytes} bytes, pre-SRTP)`);
+console.log(`  srtp decrypt ok=${stats.raw.decryptOk} fail=${stats.raw.decryptFail} | non-rtp=${stats.raw.nonRtp} rtp-parse-fail=${stats.raw.parseFail}`);
+if (stats.raw.decryptError) console.log(`  decrypt error: ${stats.raw.decryptError}`);
+if (stats.raw.parseError) console.log(`  parse error: ${stats.raw.parseError}`);
 console.log(`outbound pkts : ${stats.outboundPackets} (${toneFrames} opus tone frames + 4 DTMF)`);
 console.log(`since first   : ${(stats.inbound.elapsedMs / 1000).toFixed(1)}s`);
 if (lastInbound) console.log(`last inbound  : ${((Date.now() - lastInbound) / 1000).toFixed(1)}s ago`);

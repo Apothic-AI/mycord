@@ -26,9 +26,9 @@ import {
   MediaStreamTrack,
   MediaStreamTrackFactory,
   RTCPeerConnection,
+  RtpPacket,
   RTCRtpCodecParameters,
   RtpBuilder,
-  type RtpPacket,
 } from "werift";
 
 /** Google Voice's opus payload type. Must match what we advertise. */
@@ -342,17 +342,78 @@ export class MediaPlane {
    * against `inbound.packets` tells you whether the loss is at the ICE layer (raw stays 0)
    * or in SRTP unprotect / receiver routing (raw climbs, inbound does not).
    */
-  readonly raw = { datagrams: 0, bytes: 0 };
+  readonly raw = {
+    datagrams: 0,
+    bytes: 0,
+    decryptOk: 0,
+    decryptFail: 0,
+    nonRtp: 0,
+    parseFail: 0,
+    decryptError: null as string | null,
+    parseError: null as string | null,
+  };
 
+  /**
+   * Inbound path that bypasses werift's own media routing.
+   *
+   * werift's `isMedia()` classifies an inbound datagram as RTP only when its first byte is
+   * in (127, 192) — the range of an RTP version-2 header. But the datagrams Google Voice
+   * sends arrive with a first byte of 0xF7, so werift hands them to the RTCP handler, the
+   * RTCP parse fails, and the packet is dropped with no error. The SRTP keys are fine:
+   * feeding the very same datagrams to werift's own `SrtpSession` yields valid RTP starting
+   * `80 6f …` (version 2, payload type 111 = opus, 20 ms timestamp step).
+   *
+   * So: take the raw datagrams off the ICE connection, decrypt with the transport's SRTP
+   * session, and hand the RTP to the subscriber ourselves.
+   */
   private watchRawInbound(pc: RTCPeerConnection): void {
     const ice = pc.iceTransports?.[0] as unknown as {
       connection?: { onData?: { subscribe: (fn: (buf: Buffer) => void) => unknown } };
     };
     const onData = ice?.connection?.onData;
     if (typeof onData?.subscribe !== "function") return;
+
+    const dtls = pc.dtlsTransports?.[0] as unknown as {
+      srtp?: { decrypt?: (buf: Buffer) => Buffer };
+    };
+
     onData.subscribe((buf: Buffer) => {
       this.raw.datagrams += 1;
       this.raw.bytes += buf?.length ?? 0;
+
+      const srtp = dtls?.srtp;
+      if (typeof srtp?.decrypt !== "function") return;
+
+      let plain: Buffer;
+      try {
+        plain = srtp.decrypt(buf);
+      } catch (err) {
+        this.raw.decryptFail += 1;
+        if (!this.raw.decryptError) {
+          this.raw.decryptError =
+            `${(err as Error).constructor.name}: ${(err as Error).message}`.slice(0, 160);
+        }
+        return;
+      }
+      this.raw.decryptOk += 1;
+
+      // Only RTP (version 2) is of interest; RTCP and anything else is ignored.
+      const version = (plain[0] ?? 0) >> 6;
+      if (version !== 2) {
+        this.raw.nonRtp += 1;
+        return;
+      }
+
+      try {
+        const rtp = RtpPacket.deSerialize(plain);
+        this.handleInboundRtp(rtp);
+      } catch (err) {
+        this.raw.parseFail += 1;
+        if (!this.raw.parseError) {
+          this.raw.parseError =
+            `${(err as Error).constructor.name}: ${(err as Error).message}`.slice(0, 160);
+        }
+      }
     });
   }
 
@@ -483,10 +544,28 @@ export class MediaPlane {
     outboundBytes: number;
     connection: string;
     ice: string;
-    raw: { datagrams: number; bytes: number };
+    raw: {
+      datagrams: number;
+      bytes: number;
+      decryptOk: number;
+      decryptFail: number;
+      nonRtp: number;
+      parseFail: number;
+      decryptError: string | null;
+      parseError: string | null;
+    };
   } {
     return {
-      raw: { datagrams: this.raw.datagrams, bytes: this.raw.bytes },
+      raw: {
+        datagrams: this.raw.datagrams,
+        bytes: this.raw.bytes,
+        decryptOk: this.raw.decryptOk,
+        decryptFail: this.raw.decryptFail,
+        nonRtp: this.raw.nonRtp,
+        parseFail: this.raw.parseFail,
+        decryptError: this.raw.decryptError,
+        parseError: this.raw.parseError,
+      },
       inbound: {
         packets: this.inboundPackets,
         bytes: this.inboundBytes,
