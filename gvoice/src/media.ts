@@ -66,6 +66,26 @@ export function ensureSsrcLines(sdp: string, placeholderSsrc = 1): string {
   return out.join("\r\n");
 }
 
+/**
+ * Remove IPv6 candidates from an answer so both agents settle on one address family.
+ *
+ * See MediaPlaneOptions.useIpv6 for why this is needed: the two sides otherwise disagree
+ * about which candidate pair carries media.
+ */
+export function dropIPv6Candidates(sdp: string): string {
+  const isV6 = (line: string): boolean => {
+    if (!line.startsWith("a=candidate:")) return false;
+    const parts = line.slice("a=candidate:".length).trim().split(/\s+/);
+    // a=candidate:<foundation> <component> <transport> <priority> <address> <port> ...
+    const addr = parts[4] ?? "";
+    return addr.includes(":");
+  };
+  return sdp
+    .split(/\r?\n/)
+    .filter((line) => !isV6(line))
+    .join("\r\n");
+}
+
 export interface InboundStats {
   packets: number;
   bytes: number;
@@ -76,6 +96,16 @@ export interface InboundStats {
 export interface MediaPlaneOptions {
   /** Override the advertised codecs (defaults to opus/PT111 + telephone-event). */
   codecs?: RTCRtpCodecParameters[];
+  /**
+   * Address family to use. Defaults to IPv4 only.
+   *
+   * Google Voice's answer offers both an IPv4 and an IPv6 candidate. werift was gathering
+   * both, accepting an IPv4 pair, and reporting DTLS connected — while a packet capture
+   * showed 1615 of 1623 inbound media packets arriving over IPv6 and only 8 (the DTLS
+   * handshake) over IPv4. The two sides disagreed about which pair carried media, so werift
+   * decrypted nothing. Pinning one family on both sides removes the ambiguity.
+   */
+  useIpv6?: boolean;
 }
 
 export class MediaPlane {
@@ -121,7 +151,12 @@ export class MediaPlane {
       ];
 
     // No ICE servers: Google's peer is directly routable, so only host candidates are needed.
-    const pc = new RTCPeerConnection({ iceServers: [], codecs: { audio: codecs } });
+    const useIpv6 = opts.useIpv6 ?? false;
+    const pc = new RTCPeerConnection({
+      iceServers: [],
+      codecs: { audio: codecs },
+      ...({ ice: { useIpv4: !useIpv6, useIpv6 } } as Record<string, unknown>),
+    });
     const plane = new MediaPlane(pc);
     const [track, , dispose] = await MediaStreamTrackFactory.rtpSource({ kind: "audio" });
     plane.outbound = track;
@@ -151,7 +186,10 @@ export class MediaPlane {
       // silently drops every inbound RTP packet. Inject a placeholder SSRC so the track
       // exists, then swap in a wildcard track that accepts any SSRC (werift filters
       // inbound RTP by the SSRC named in the answer, and we cannot know Google's).
-      await this.pc.setRemoteDescription({ type: "answer", sdp: ensureSsrcLines(sdp) });
+      await this.pc.setRemoteDescription({
+        type: "answer",
+        sdp: ensureSsrcLines(dropIPv6Candidates(sdp)),
+      });
     } catch (err) {
       throw new Error(
         `setRemoteDescription(answer) failed: ${err instanceof Error ? err.message : String(err)}\n` +
@@ -242,6 +280,11 @@ export class MediaPlane {
 
   get iceConnectionState(): string {
     return this.pc.iceConnectionState;
+  }
+
+  /** True once the DTLS handshake has produced SRTP keys. */
+  get dtlsConnected(): boolean {
+    return this.pc.dtlsTransports?.[0]?.state === "connected";
   }
 
   /** Resolves once ICE completes. Google is ICE-lite so this is quick. */
@@ -356,7 +399,10 @@ export class MediaPlane {
     // Note the accessors are plural: `dtlsTransports` / `iceTransports` are arrays.
     const dtls = this.pc.dtlsTransports?.[0] as unknown as {
       state?: string;
-      srtp?: { keyLength?: number };
+      cipherSuite?: { name?: string };
+      srtpProfiles?: number[];
+      srtp?: { keyLength?: number; profile?: { name?: string } };
+      localKeyPair?: unknown;
     } | undefined;
     const ice = this.pc.iceTransports?.[0] as unknown as {
       role?: string;
@@ -387,7 +433,10 @@ export class MediaPlane {
       iceGatheringState: ice?.gatheringState,
       iceRole: ice?.role,
       dtlsState: dtls?.state,
-      srtpKeyLength: dtls?.srtp?.keyLength,
+      dtlsCipherSuite: dtls?.cipherSuite?.name ?? null,
+      negotiatedSrtpProfiles: dtls?.srtpProfiles ?? null,
+      srtpKeyLength: dtls?.srtp?.keyLength ?? null,
+      srtpProfileName: dtls?.srtp?.profile?.name ?? null,
       selectedCandidatePair: selected,
       transceivers: this.pc.getTransceivers().map((t) => ({
         direction: t.direction,

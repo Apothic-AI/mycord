@@ -79,44 +79,52 @@ if (result.answer) {
 
 console.log(`\nwaiting up to ${seconds}s for media…`);
 const deadline = Date.now() + seconds * 1000;
-let dtmfSent = false;
-
-// Transmit once the transport is up. Google's media engine may not emit anything until it
-// sees inbound RTP, so sending first avoids a standstill.
+// Transmit once the transport is genuinely ready, then keep sending.
+//
+// Two things matter here. RTP written before DTLS/SRTP is ready is silently dropped, so
+// wait for the transport rather than ICE alone. And a short burst followed by silence is
+// not how a call behaves — send continuously at 20 ms intervals, the way a real endpoint
+// does, since the peer may not bridge media until it sees a steady stream.
 const encoder = new OpusEncoder();
 let toneFrames = 0;
+let txTimer: NodeJS.Timeout | undefined;
+let dtmfSent = false;
 
-async function kickIfReady(): Promise<void> {
-  const s = media.stats();
-  if (s.ice !== "connected" && s.ice !== "completed") return;
-  if (media.stats().outboundPackets > 0) return;
+async function startTransmit(): Promise<void> {
+  if (txTimer) return;
 
-  // DTMF first: cheap and proves in-band signalling reaches the far end.
-  for (const d of "5555") {
-    media.sendDtmf(d, 80);
-    await new Promise((r) => setTimeout(r, 140));
+  // Wait for DTLS (not just ICE) so the first SRTP-protected packet is not lost.
+  for (let i = 0; i < 40; i++) {
+    if (media.dtlsConnected) break;
+    await new Promise((r) => setTimeout(r, 250));
   }
-  console.log(`   sent DTMF 5 5 5 5 after ICE ${s.ice}`);
+  console.log(`   transport ready (dtls=${media.dtlsConnected ? "connected" : "unconfirmed"}), starting TX`);
 
-  // Then a short 440 Hz tone, 20 ms at a time, as real opus.
-  for (let i = 0; i < 25; i++) {
-    media.sendOpus(encoder.encode(sineFrame(440, 0.3)));
-    toneFrames++;
-    await new Promise((r) => setTimeout(r, 20));
+  for (const d of "5") {
+    media.sendDtmf(d, 90);
+    await new Promise((r) => setTimeout(r, 160));
   }
-  console.log(`   sent ${toneFrames} opus frames (440 Hz tone)`);
   dtmfSent = true;
+  console.log("   sent DTMF 5");
+
+  txTimer = setInterval(() => {
+    try {
+      media.sendOpus(encoder.encode(sineFrame(440, 0.25)));
+      toneFrames++;
+    } catch {
+      /* track not ready yet; the next tick will retry */
+    }
+  }, 20);
 }
+
+await startTransmit();
 
 while (Date.now() < deadline) {
   await new Promise((r) => setTimeout(r, 250));
   const s = media.stats();
-  if (!dtmfSent && (sendDtmf || true)) await kickIfReady();
   if (s.inbound.packets > 200) break;
 }
-
-// werift's getStats() returns an empty array until collectStats() is called,
-// so it is not useful for diagnosing inbound traffic here.
+if (txTimer) clearInterval(txTimer);
 
 console.log("\n=== transport diagnostics ===");
 console.log(JSON.stringify(await media.diagnostics(), null, 1));

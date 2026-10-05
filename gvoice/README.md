@@ -199,27 +199,45 @@ Measured round-trip of a 440 Hz tone: 119-byte packet, decoded peak 1.29, rms 0.
 
 ### Known werift interop gap (inbound)
 
-werift does not currently receive audio from Google Voice, and the cause is not yet pinned
-down. What is established:
+werift does not currently receive audio from Google Voice. A packet capture pins down how
+far the media path actually gets.
 
-- A local werift↔werift loopback works in both roles — the offerer receives fine (20 packets),
-  so the pipeline and the receiver wiring are sound.
-- Google's answer SDP is minimal and **contains no `a=ssrc:` lines**. werift only creates a
-  receiver track when it can key it by an SSRC, so it accepts the answer, reports
-  `receiver tracks: 0`, and drops everything. `ensureSsrcLines()` works around that.
-- werift routes inbound RTP by bare `trackBySSRC[ssrc]` lookup and passes `undefined`
-  through on a miss, so an unknown SSRC is silently discarded. `wireWildcardReceive()` plus a
-  `handleRtpBySsrc` wrapper let the first inbound packet register its own SSRC.
-- Even with both workarounds, **no packet reaches the receiver** — the SSRC-learning shim
-  never fires even though `dtlsState` reports `connected` and 29 packets are transmitted.
-  So Google is either not sending, or its SRTP is not being unprotected. werift's
-  `getStats()` returns an empty array until `collectStats()` is called, which removes the
-  usual visibility for telling those apart.
+**What reaches us, verified with tcpdump during a live call:**
 
-Options: debug werift's SRTP path, or switch the media stack (pion in Go, aiortc in Python)
-— but note that reintroduces a non-Node runtime. The pragmatic working configuration today
-is Node for all signalling and control with a headless Chrome as the media host, which is
-verified to extract real call audio.
+```
+udp port 26500  →  1647 inbound packets
+  all IPv4 after pinning (see below)
+  payload first bytes: 01 01 00 44 21 12 a4 42 …   <- STUN magic cookie 0x2112A442
+```
+
+Every inbound packet is a **STUN Binding Success Response** (message type `0x0101`), not RTP.
+So Google completes ICE and keeps answering our checks, but sends **zero media**.
+
+**What is proven working browser-free:** SIP REGISTER, the full INVITE dialog
+(100 / 183 / PRACK / 180 / 200 / ACK / BYE), ICE connected, DTLS connected with negotiated
+SRTP profiles (`[7, 1]`), and 1000+ SRTP-protected opus packets delivered to Google's media
+address.
+
+**Ruled out along the way:**
+
+- werift's own pipeline — a local loopback receives fine in both roles, offerer included.
+- Google's answer lacking `a=ssrc:` — worked around with `ensureSsrcLines()`; werift's
+  `trackBySSRC[ssrc]` miss silently dropping packets is worked around by
+  `wireWildcardReceive()` plus a `handleRtpBySsrc` wrapper.
+- The ICE address family — Google offered both, werift gathered both, and a capture showed
+  1615 of 1623 inbound packets on **IPv6** while the DTLS handshake ran on IPv4, so the two
+  sides disagreed about which pair carried media. `MediaPlaneOptions.useIpv6` now pins one
+  family (IPv4 by default) and `dropIPv6Candidates()` strips the other from the answer.
+- The three Birdsong headers, at the SIP layer — a call rings and is answered without them,
+  and replaying captured values changed nothing.
+
+**What remains:** Google answers STUN but never bridges media. Either these test calls are
+never actually answered at the PSTN leg (they end `504`), or Google's media service needs
+something beyond SIP signalling that the web client sends — plausibly an authenticated step
+through the proprietary `X-Google-*` RPC surface rather than a SIP header.
+
+werift's `getStats()` returns an empty array until `collectStats()` runs, so packet capture
+(`tcpdump -i wlan0 -n 'udp port 26500'`) is the reliable way to tell media from keepalive.
 
 ### SMS send needs a server-issued token
 
