@@ -9,7 +9,8 @@
 
 import { MediaPlane } from "./media.ts";
 import { SipSession } from "./registrar.ts";
-import { OpusEncoder, OpusFrameDecoder, peak, rms, sineFrame } from "./audio.ts";
+import { OpusUtteranceEncoder } from "./opusenc.ts";
+import { SAMPLE_RATE, OpusFrameDecoder, peak, rms, sineFrame } from "./audio.ts";
 
 const e164Arg = process.argv[2];
 const seconds = Number(process.argv[3] ?? 20);
@@ -85,7 +86,11 @@ const deadline = Date.now() + seconds * 1000;
 // wait for the transport rather than ICE alone. And a short burst followed by silence is
 // not how a call behaves — send continuously at 20 ms intervals, the way a real endpoint
 // does, since the peer may not bridge media until it sees a steady stream.
-const encoder = new OpusEncoder();
+const encoder = new OpusUtteranceEncoder({ bitrate: 24000 });
+// Opus is encoded over a whole utterance, so pre-encode one second of tone and cycle it.
+const tonePackets = await encoder.encode(sineFrame(440, 0.25, SAMPLE_RATE));
+let toneIndex = 0;
+let tonePacket: Buffer | undefined;
 let toneFrames = 0;
 let txTimer: NodeJS.Timeout | undefined;
 let dtmfSent = false;
@@ -109,7 +114,9 @@ async function startTransmit(): Promise<void> {
 
   txTimer = setInterval(() => {
     try {
-      media.sendOpus(encoder.encode(sineFrame(440, 0.25)));
+      tonePacket = tonePackets[toneIndex % tonePackets.length];
+      toneIndex++;
+      media.sendOpus(tonePacket ?? Buffer.alloc(0));
       toneFrames++;
     } catch {
       /* track not ready yet; the next tick will retry */

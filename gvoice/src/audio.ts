@@ -1,116 +1,27 @@
 /**
- * Opus codec glue for the Google Voice media path.
+ * Opus decoding and PCM helpers for the Google Voice media path.
  *
  * Google negotiates `opus/48000/2` (payload type 111), so the codec runs at 48 kHz with
  * 20 ms frames of 960 samples. RTP carries one complete opus packet per frame, which maps
  * cleanly onto the decoder's per-frame API.
  *
- * Two implementations are in play because neither package does both jobs well:
+ * Decoding uses `opus-decoder` (wasm). Note its `decodeFrame` resolves to an object with
+ * `channelData`, not a bare channel array — easy to get wrong.
  *
- *  - **encode** via `opusscript` (emscripten libopus). It exposes an encoder *and*
- *    decoder, but is synchronous and older.
- *  - **decode** via `opus-decoder` (wasm). Faster and better maintained. Its
- *    `decodeFrame` resolves to an object with `channelData`, not a bare channel array —
- *    easy to get wrong.
+ * Encoding lives in `opusenc.ts`, not here. It was previously done by `opusscript`, whose
+ * output no conformant decoder could read; see that file for the details.
  *
  * Everything is mono internally and duplicated to stereo on the wire, since a phone call is
  * mono and opus in stereo mostly wastes bitrate.
  */
 
-import { createRequire } from "node:module";
 import { OpusDecoder } from "opus-decoder";
-
-const require = createRequire(import.meta.url);
 
 export const SAMPLE_RATE = 48000;
 export const FRAME_SAMPLES = 960; // 20 ms
 export const CHANNELS = 1;
 
-interface OpusCodec {
-  /** Accepts Int16 PCM; Float32 is accepted by the typings but encodes as near-silence. */
-  encode(pcm: Float32Array | Int16Array, frameSize: number): Buffer;
-  decode(packet: Uint8Array): Float32Array;
-  /** libopus control; takes a bitrate in bits/second. */
-  encoderCTL?: (bitrate: number) => void;
-  delete?(): void;
-}
-
-type OpusScriptCtor = new (sampleRate: number, channels: number, application?: number) => OpusCodec;
-
-interface OpusScriptModule {
-  Application: { VOIP: number; AUDIO: number; RESTRICTED_LOWDELAY: number };
-  default?: OpusScriptCtor;
-}
-
-// opusscript is CommonJS and exposes the constructor either as the module itself or as
-// `.default` depending on interop, so normalise both shapes. It ships no type declarations,
-// hence the cast through unknown.
-const required = require("opusscript") as unknown;
-const mod = required as OpusScriptModule;
-const OpusScript = ((mod as { default?: unknown }).default ?? required) as OpusScriptCtor;
-
-export interface EncoderOptions {
-  /** Target bitrate in bits/second. 24 kbps is a reasonable voice default. */
-  bitrate?: number;
-  /** libopus application. VOIP is right for calls. */
-  application?: number;
-}
-
-/** Stateful opus encoder producing one packet per 20 ms frame. */
-export class OpusEncoder {
-  private readonly codec: OpusCodec;
-  private readonly bitrate: number;
-  /** False when the encoder ignored our bitrate request (opusscript does). */
-  private bitrateApplied = false;
-
-  constructor(opts: EncoderOptions = {}) {
-    this.bitrate = opts.bitrate ?? 24000;
-    this.codec = new OpusScript(SAMPLE_RATE, CHANNELS, opts.application ?? mod.Application.VOIP);
-    // opusscript's encoderCTL throws "Unimplemented", so the bitrate is only a request.
-    // Frame size still has to be passed per encode() call, which is what actually matters
-    // for a fixed 20 ms pipeline.
-    try {
-      this.codec.encoderCTL?.(this.bitrate);
-      this.bitrateApplied = true;
-    } catch {
-      this.bitrateApplied = false;
-    }
-  }
-
-  /**
-   * Encode 960 mono samples at 48 kHz into one opus packet.
-   * Pass `null` to emit a DTX/keepalive frame when there is nothing to send.
-   *
-   * Note the Float32 -> Int16 conversion is *required*: opusscript's encoder takes Int16
-   * PCM. Handing it Float32 in the nominal ±1.0 range silently produces a much smaller
-   * packet (57 B vs 120 B) that decodes to near-silence, because ±1.0 is effectively
-   * inaudible at int16 scale. Scale by 32767 and clamp.
-   */
-  encode(pcm: Float32Array | null): Buffer {
-    if (pcm === null) {
-      // 0xF8FFFE is a standard opus DTX frame (valid for any frame size).
-      return Buffer.from([0xf8, 0xff, 0xfe]);
-    }
-    if (pcm.length !== FRAME_SAMPLES) {
-      throw new Error(`expected ${FRAME_SAMPLES} samples (20 ms), got ${pcm.length}`);
-    }
-    return this.codec.encode(floatToInt16(pcm), FRAME_SAMPLES);
-  }
-
-  get bitrateBps(): number {
-    return this.bitrate;
-  }
-
-  /** Whether the requested bitrate was actually honoured. */
-  get bitrateIsApplied(): boolean {
-    return this.bitrateApplied;
-  }
-
-  close(): void {
-    this.codec.delete?.();
-  }
-}
-
+/** One decoded 20 ms frame. */
 export interface DecodedFrame {
   /** Mono samples for this frame. */
   samples: Float32Array;
@@ -191,6 +102,23 @@ export function peak(samples: Float32Array): number {
     if (v > p) p = v;
   }
   return p;
+}
+
+/**
+ * Scale `samples` so its peak hits `target`, and return the gain applied.
+ *
+ * Neural TTS often renders straight to full scale, which clips once opus encodes it and
+ * sounds harsh on the phone. Google Voice's own signalling audio peaks around 0.16, so
+ * 0.7 is a safe ceiling for speech: loud, no inter-sample clipping.
+ */
+export function normalize(samples: Float32Array, target = 0.7): number {
+  const p = peak(samples);
+  if (p === 0) return 1;
+  const gain = target / p;
+  if (gain !== 1) {
+    for (let i = 0; i < samples.length; i++) samples[i] = (samples[i] ?? 0) * gain;
+  }
+  return gain;
 }
 
 /**

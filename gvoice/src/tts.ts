@@ -13,13 +13,13 @@
  * `opus/48000/2` requires.
  */
 
-import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { execFile, spawn } from "node:child_process";
+import { access, mkdtemp, rm } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
-import { SAMPLE_RATE, floatToInt16, toFrames } from "./audio.ts";
+import { SAMPLE_RATE, floatToInt16, normalize } from "./audio.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -30,6 +30,8 @@ export interface TtsOptions {
   rate?: number;
   /** 0..100. */
   pitch?: number;
+  /** Piper only: >1 slows delivery. */
+  lengthScale?: number;
   /** Peak amplitude of the returned PCM. */
   gain?: number;
 }
@@ -69,8 +71,11 @@ export class EspeakTts implements TtsBackend {
       args.push("-w", wav, text);
       await execFileAsync("espeak-ng", args);
       const pcm = await wavToPcm48k(wav);
-      const gain = opts.gain ?? 1.0;
-      return gain === 1.0 ? pcm : pcm.map((v) => v * gain);
+      normalize(pcm, 0.7);
+      if (opts.gain !== undefined && opts.gain !== 1) {
+        for (let i = 0; i < pcm.length; i++) pcm[i] = (pcm[i] ?? 0) * opts.gain!;
+      }
+      return pcm;
     } finally {
       await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
@@ -121,6 +126,64 @@ export class CommandTtsBackend implements TtsBackend {
   }
 }
 
+/**
+ * Local neural TTS via Piper. Default backend when installed.
+ *
+ * Piper is a single ONNX model on CPU and runs around 6.5x faster than real time, so it
+ * adds no perceptible latency to a live call — which is the whole point of a telephony
+ * agent. Stdin drives synthesis, because the Piper CLI ignores positional text.
+ *
+ * Override the install location with `PIPER_DIR` (default `~/.local/share/piper`).
+ */
+export class PiperTts implements TtsBackend {
+  readonly name = "piper";
+
+  async speak(text: string, opts: TtsOptions = {}): Promise<Float32Array> {
+    const dir = process.env.PIPER_DIR ?? join(homedir(), ".local", "share", "piper");
+    const model = opts.voice ?? "en_US-amy-medium";
+    const onnx = join(dir, "voices", `${model}.onnx`);
+    await access(onnx).catch(() => {
+      throw new Error(
+        `piper voice not found at ${onnx}. Download a voice from ` +
+          `https://huggingface.co/rhasspy/piper-voices/tree/main/en/en_US/amy/medium ` +
+          `or set PIPER_DIR.`,
+      );
+    });
+
+    const dirTmp = await mkdtemp(join(tmpdir(), "gv-tts-"));
+    const wav = join(dirTmp, "out.wav");
+    try {
+      const args = [
+        "-m", onnx,
+        "-c", `${onnx}.json`,
+        "-f", wav,
+        // length_scale > 1 slows delivery, which reads as more deliberate on the phone.
+        "--length_scale", String(opts.lengthScale ?? 1.0),
+      ];
+      await new Promise<void>((resolve, reject) => {
+        const child = spawn(join(dir, "piper"), args, {
+          env: { ...process.env, LD_LIBRARY_PATH: `${dir}:${process.env.LD_LIBRARY_PATH ?? ""}` },
+          stdio: ["pipe", "ignore", "ignore"],
+        });
+        child.on("error", reject);
+        child.on("exit", (code) =>
+          code === 0 ? resolve() : reject(new Error(`piper exited with code ${code}`)),
+        );
+        child.stdin.end(text);
+      });
+      const pcm = await wavToPcm48k(wav);
+      // Neural TTS renders at full scale and clips in opus; normalise before encoding.
+      normalize(pcm, 0.7);
+      if (opts.gain !== undefined && opts.gain !== 1) {
+        for (let i = 0; i < pcm.length; i++) pcm[i] = (pcm[i] ?? 0) * opts.gain!;
+      }
+      return pcm;
+    } finally {
+      await rm(dirTmp, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+}
+
 export interface UtteranceResult {
   /** Frames actually sent. */
   framesSent: number;
@@ -139,6 +202,10 @@ export interface UtteranceResult {
 export class SpeechSender {
   private cancelled = false;
   private timer: NodeJS.Timeout | undefined;
+  /** True while frames are actually being transmitted. */
+  playing = false;
+  /** Peak level of the audio most recently transmitted, for echo gating. */
+  lastTxPeak = 0;
   /** Resolves when the utterance finishes or is interrupted. */
   private done?: Promise<UtteranceResult>;
 
@@ -151,11 +218,19 @@ export class SpeechSender {
     this.frameIntervalMs = frameIntervalMs;
   }
 
-  /** Speak `pcm`, resolving when playback completes. */
-  play(encodeFrame: (pcm: Float32Array) => Buffer, pcm: Float32Array): Promise<UtteranceResult> {
+  /**
+   * Play already-encoded opus packets, paced at real time.
+   *
+   * Takes packets rather than PCM because encoding happens over the whole utterance —
+   * variable bitrate and lookahead need a sequence, not isolated 20 ms frames.
+   *
+   * `levels` gives the peak of each frame so echo gating can compare the far end against
+   * what we are actually sending at that moment.
+   */
+  play(packets: Buffer[], levels?: number[]): Promise<UtteranceResult> {
     this.stop();
     this.cancelled = false;
-    const frames = [...toFrames(pcm)];
+    const frames = packets;
 
     this.done = new Promise<UtteranceResult>((resolve) => {
       let index = 0;
@@ -170,11 +245,19 @@ export class SpeechSender {
         });
       };
 
+      this.playing = true;
       this.timer = setInterval(() => {
-        if (this.cancelled) return finish(true);
+        if (this.cancelled) {
+          this.playing = false;
+          return finish(true);
+        }
         const frame = frames[index];
-        if (!frame) return finish(false);
-        this.send(encodeFrame(frame));
+        if (!frame) {
+          this.playing = false;
+          return finish(false);
+        }
+        this.send(frame);
+        this.lastTxPeak = levels?.[index] ?? this.lastTxPeak;
         index += 1;
       }, this.frameIntervalMs);
     });
@@ -182,13 +265,14 @@ export class SpeechSender {
     return this.done;
   }
 
-  /** Cut off any in-flight playback (barge-in). */
-  stop(): void {
-    if (this.timer) {
-      this.cancelled = true;
-      clearInterval(this.timer);
-      this.timer = undefined;
-    }
+  /** Cut off any in-flight playback (barge-in). No-op when nothing is playing. */
+  stop(): boolean {
+    if (!this.timer) return false;
+    this.cancelled = true;
+    this.playing = false;
+    clearInterval(this.timer);
+    this.timer = undefined;
+    return true;
   }
 
   /** Await the current utterance, if any. */

@@ -9,7 +9,8 @@
 
 import { MediaPlane } from "./media.ts";
 import { SipSession } from "./registrar.ts";
-import { OpusEncoder, OpusFrameDecoder, peak, rms } from "./audio.ts";
+import { OpusFrameDecoder, peak, rms } from "./audio.ts";
+import { OpusUtteranceEncoder } from "./opusenc.ts";
 import { EspeakTts, SpeechSender } from "./tts.ts";
 
 const e164Arg = process.argv[2];
@@ -24,7 +25,7 @@ const toE164 = e164Arg.startsWith("+") ? e164Arg : `+${e164Arg.replace(/\D/g, ""
 
 const media = await MediaPlane.create();
 const decoder = new OpusFrameDecoder();
-const encoder = new OpusEncoder();
+const encoder = new OpusUtteranceEncoder({ bitrate: 24000 });
 const sender = new SpeechSender((pkt) => media.sendOpus(pkt));
 
 // --- inbound analysis ---
@@ -105,7 +106,7 @@ if (!result.answer) {
       const pcm = await new EspeakTts().speak(phrase, { rate: 160, gain: 0.9 });
       console.log(`  synthesised ${(pcm.length / 48000).toFixed(2)}s of speech`);
       spokeAt = Date.now();
-      await sender.play((frame) => encoder.encode(frame), pcm);
+      await sender.play(await encoder.encode(pcm));
       spokeEndAt = Date.now();
       const spoken = await sender.settled();
       console.log(`  sent ${spoken?.framesSent ?? 0} frames in ${((spoken?.durationMs ?? 0) / 1000).toFixed(2)}s`);

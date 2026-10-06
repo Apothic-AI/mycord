@@ -8,7 +8,8 @@
     "probe:sip": "node src/probe-sip.ts",
     "probe:discover": "node src/probe-discover.ts",
     "probe:media": "node src/probe-media.ts",
-    "probe:voice": "node src/probe-voice.ts"
+    "probe:voice": "node src/probe-voice.ts",
+    "probe:agent": "node src/probe-agent.ts"
   },
   "keywords": [],
   "author": "",
@@ -16,7 +17,6 @@
   "type": "module",
   "dependencies": {
     "opus-decoder": "^0.7.12",
-    "opusscript": "^0.1.1",
     "werift": "^0.24.4",
     "ws": "^8.22.0"
   },

@@ -11,9 +11,6 @@ importers:
       opus-decoder:
         specifier: ^0.7.12
         version: 0.7.12
-      opusscript:
-        specifier: ^0.1.1
-        version: 0.1.1
       werift:
         specifier: ^0.24.4
         version: 0.24.4
@@ -293,9 +290,6 @@ packages:
 
   opus-decoder@0.7.12:
     resolution: {integrity: sha512-6zpHFDi/MhYvMwyYiuJPqJ2lcRkfm7wHblSvT3lUtx/kLvHkunoe/rhTn1dLKxqVGLeQj3gQi7CnR0N2p3RuOg==}
-
-  opusscript@0.1.1:
-    resolution: {integrity: sha512-mL0fZZOUnXdZ78woRXp18lApwpp0lF5tozJOD1Wut0dgrA9WuQTgSels/CSmFleaAZrJi/nci5KOVtbuxeWoQA==}
 
   pvtsutils@1.3.6:
     resolution: {integrity: sha512-PLgQXQ6H2FWCaeRak8vvk1GW462lMxB5s3Jm673N82zI4vqtVUPuZdffdZbPDFRoU8kAhItWFtPCWiPpp4/EDg==}
@@ -597,8 +591,6 @@ snapshots:
   opus-decoder@0.7.12:
     dependencies:
       '@wasm-audio-decoders/common': 9.0.7
-
-  opusscript@0.1.1: {}
 
   pvtsutils@1.3.6:
     dependencies:

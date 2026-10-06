@@ -22,6 +22,9 @@ call signaling over SIP-on-WebSocket. **Everything here runs outside the browser
 | Inbound audio, pure Node | ✅ **1852 opus frames decoded, peak 0.66** |
 | Outbound synthesized speech | ✅ **211 opus frames, real-time paced** |
 | Two-way speech, no audio device | ✅ `node src/probe-voice.ts +18003569377` |
+| Local speech-to-text (Whisper) | ✅ full IVR prompts transcribed verbatim |
+| Local neural TTS (Piper) | ✅ ~6x faster than real time on CPU |
+| Full agent loop (VAD → STT → brain → TTS) | ✅ 3-turn live conversation |
 | Inbound audio via headless-Chrome media host | ✅ proven: 5.28 M samples extracted |
 | Opus encode/decode, TX injection, RX decode | ✅ implemented and verified locally |
 
@@ -285,6 +288,124 @@ far-end audio timeline (1s buckets, bar = peak amplitude):
 
 The `t+30s` burst after we stop talking is the IVR responding — the loop is genuinely
 bidirectional, with no audio device, no browser, and no virtual sound card anywhere.
+
+### A working voice agent
+
+`src/agent.ts` closes the loop: far-end speech → VAD → Whisper → brain → Piper → opus, with
+barge-in. The brain is a callback, so the same media path serves IVR navigation, scripted
+prompts, or a hosted LLM.
+
+A real 3-turn conversation against the 1-800-FLOWERS virtual agent, all local:
+
+```
+1. heard : "Hey there! I'm the 1-800-Flowers virtual agent. Do you want to track and
+           order, review delivery info, or ask about something else today?"
+   said  : "Track and order."
+2. heard : "Let me check."
+   said  : "Track an order, please."
+3. heard : "Are you the person who placed the order, or are you the recipient?"
+   said  : "I am the recipient of the order."
+   -> IVR: "Got it."
+```
+
+```
+$ node src/probe-agent.ts +18003569377 --seconds 65 --brain script
+media: in 3267 pkts | out 342 | decrypt ok=3267 fail=13
+agent: 3 turns | mean latency 5.58s
+```
+
+Brains: `script` (rule-based IVR navigator), `echo` (repeats what it heard, the clearest
+proof the round trip works), `http` (any OpenAI-compatible endpoint via `GV_LLM_URL`).
+
+#### The outbound encoder was broken for the entire project
+
+Worth stating plainly, because it hid inside "everything works": **`opusscript` produced
+packets no conformant decoder could read.** Outbound speech was unintelligible noise on the
+wire the whole time — inbound audio decoded perfectly the entire while, which made the bug
+look like a far-end problem.
+
+It was nearly undetectable locally. The packets looked right: ~120 bytes each, a legal TOC
+byte (`0x78`), plausible sizes, and passing them through our own decoder gave audio of the
+right length. The giveaway was that the decoded audio bore no relationship to the input —
+a sine at amplitude 0.1 came back as noise at peak 1.53.
+
+Isolating it took a known-good reference:
+
+1. Encoded a 1 s 440 Hz sine at amplitude 0.5 with `opusenc` (libopus, opus-tools).
+2. Extracted its packets from the Ogg container and decoded them with `opus-decoder`.
+3. Got peak 0.5039, rms 0.35129 — expected 0.5 / 0.3536. **The decoder is correct.**
+4. Ran the same signal through `opusscript`: noise.
+
+So encoding moved to `opusenc` in `src/opusenc.ts`, and `opusscript` is gone. Packets went
+from 119 B to 58 B — correct for 24 kbps, and about half of what the broken encoder was
+emitting. Round-tripping Piper → opus → decode → Whisper now returns the sentence verbatim.
+
+Encoding whole utterances rather than frame-by-frame is also the correct shape for opus:
+variable bitrate and lookahead need a sequence, which is exactly how `SpeechSender` plays.
+
+#### Echo: Google returns your own voice to you
+
+The first barge-in implementation was unusable — it cancelled itself mid-sentence,
+repeatedly, logging dozens of `barge-in: stopped speaking` events. Cause: Google Voice sends
+back the audio we transmit, so the VAD heard us interrupting us. Timeline from an early run
+showed far-end "speech" at exactly the seconds we were speaking.
+
+Fixed in `VoiceAgent` by gating on level: while transmitting, frames quieter than
+`ourTX × bargeInGuard` are treated as echo and never reach the VAD. The far end talking over
+us is measurably louder than our own loopback, so genuine interruption still registers:
+
+```
+[+44.4s] heard: "Okay."
+[+45.9s] barge-in: far end is louder than our own echo
+[+45.9s] barge-in: stopped speaking
+```
+
+A short settle window after we stop speaking (`echoSettleMs`) keeps the VAD from
+re-triggering on the decaying echo tail.
+
+#### Latency, and why the model choice matters
+
+| stage | latency | notes |
+|---|---|---|
+| Piper synthesis | 0.6 s for 3.5 s of audio | ~6x faster than real time, CPU only |
+| faster-whisper (small.en, int8) | 1.8 s | persistent worker, model loaded once |
+| opus encode | 0.04 s | |
+| end-to-end turn | ~2.5–5.5 s | dominated by the far end's own pauses |
+
+`openai-whisper` measured **~15 s for a 5 s utterance** on CPU-only torch — unusable for
+conversation. `faster-whisper` (CTranslate2, int8) is roughly 4x faster and adds VAD
+filtering, which phone audio needs because it is mostly silence between turns. `turbo`
+also works but is slower still than `small.en` on short utterances; `small.en` transcribes
+IVR prompts verbatim.
+
+Two implementation traps hit along the way, both silent:
+
+- **faster-whisper assumes 16 kHz.** Handing it a 22.05 kHz array reinterpreted at the wrong
+  speed returned fluent, completely wrong text ("Ha, ha, ha."). `stt.ts` now resamples to
+  16 kHz before writing the WAV.
+- **PyAV does not build on Python 3.14** (`open() got an unexpected keyword argument
+  'metadata_errors'`), and faster-whisper uses it for decoding. The worker decodes with the
+  stdlib `wave` module instead and passes a NumPy array straight to `transcribe`.
+
+#### Setup
+
+```bash
+# STT (optional but recommended): faster-whisper into a venv
+python3 -m venv ~/.local/share/gvoice/fw-venv
+~/.local/share/gvoice/fw-venv/bin/pip install faster-whisper
+
+# TTS: Piper binary + a voice
+mkdir -p ~/.local/share/piper/voices
+curl -LO <rhasspy/piper-voices>/en/en_US/amy/medium/en_US-amy-medium.onnx{,json}
+
+# opus encoding
+brew install opus-tools
+
+pnpm add -D typescript && pnpm run typecheck
+```
+
+`WhisperStt` auto-detects the venv, then `python3`, then the interpreter behind the `whisper`
+CLI, preferring faster-whisper and falling back to `openai-whisper`.
 
 ### SMS send needs a server-issued token
 
