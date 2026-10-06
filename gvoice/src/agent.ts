@@ -23,6 +23,9 @@ import { OpusFrameDecoder } from "./audio.ts";
 import { OpusUtteranceEncoder } from "./opusenc.ts";
 import { SpeechSender, type TtsBackend } from "./tts.ts";
 import type { SttBackend } from "./types.ts";
+import type { ControlHost, TranscriptEvent } from "./control.ts";
+import { randomUUID } from "node:crypto";
+
 import { PreRollBuffer, Vad } from "./vad.ts";
 import { peak, toFrames } from "./audio.ts";
 
@@ -82,9 +85,13 @@ export interface AgentOptions {
   echoSettleMs?: number;
   onTurn?: (turn: Turn) => void;
   onLog?: (msg: string) => void;
+  /** Stream of transcript events, emitted as speech is recognised. */
+  onTranscript?: (event: TranscriptEvent) => void;
+  /** How often to attempt a streaming partial while the far end is still speaking. */
+  partialIntervalMs?: number;
 }
 
-/** Minimal STT contract, satisfied by WhisperStt and WhisperCliStt. */
+/** Minimal STT contract, satisfied by ParakeetStt and WhisperStt. */
 export type { SttBackend } from "./types.ts";
 
 export class VoiceAgent {
@@ -103,6 +110,12 @@ export class VoiceAgent {
   private turns = 0;
   private dropped = 0;
   private suppressEcho = true;
+  private readonly startedAt = Date.now();
+  private utteranceId = "";
+  private utterance: Float32Array[] = [];
+  private lastPartialAt = 0;
+  private lastPartialText = "";
+  private readonly transcriptListeners = new Set<(e: TranscriptEvent) => void>();
 
   private readonly media: MediaPlane;
 
@@ -157,6 +170,7 @@ export class VoiceAgent {
 
       if (event?.type === "speech-start") {
         this.preRoll.push(frame);
+        this.beginUtterance();
         if (this.bargeable && this.sender.stop()) this.log("barge-in: stopped speaking");
         continue;
       }
@@ -167,9 +181,76 @@ export class VoiceAgent {
         continue;
       }
 
-
       this.preRoll.push(frame);
+      if (this.vad.speaking) {
+        this.utterance.push(frame);
+        this.maybeEmitPartial();
+      }
     }
+  }
+
+  /** Start a new utterance and tell listeners speech has begun. */
+  private beginUtterance(): void {
+    this.utterance = [];
+    this.utteranceId = randomUUID();
+    this.lastPartialAt = Date.now();
+    this.lastPartialText = "";
+    this.emit("speech-start", "");
+  }
+
+  private emit(kind: TranscriptEvent["kind"], text: string): void {
+    const event: TranscriptEvent = {
+      utteranceId: this.utteranceId,
+      kind,
+      text,
+      at: this.elapsedSeconds,
+    };
+    this.opts.onTranscript?.(event);
+    for (const fn of this.transcriptListeners) {
+      try {
+        fn(event);
+      } catch {
+        // A broken listener must not break the call or the other listeners.
+      }
+    }
+  }
+
+  /**
+   * Subscribe to transcript events. Returns an unsubscribe function.
+   *
+   * Separate from the constructor callback so late subscribers — an HTTP control server
+   * that starts after the call is already up — do not miss anything.
+   */
+  onTranscript(fn: (event: TranscriptEvent) => void): () => void {
+    this.transcriptListeners.add(fn);
+    return () => {
+      this.transcriptListeners.delete(fn);
+    };
+  }
+
+  /**
+   * Emit a streaming partial if the backend supports it and enough time has passed.
+   *
+   * Only re-emits on change: backends revise the tail rather than the whole string, and
+   * an agent does not need waking for an identical partial. Failures are swallowed — a
+   * missed partial costs a little latency, while throwing would cost the call.
+   */
+  private maybeEmitPartial(): void {
+    const interval = this.opts.partialIntervalMs ?? 450;
+    const partial = this.opts.stt.partial;
+    if (!partial) return;
+    if (Date.now() - this.lastPartialAt < interval) return;
+    this.lastPartialAt = Date.now();
+
+    const audio = concatFrames(this.utterance);
+    void partial
+      .call(this.opts.stt, audio)
+      .then((text) => {
+        if (!this.running || !text || text === this.lastPartialText) return;
+        this.lastPartialText = text;
+        this.emit("partial", text);
+      })
+      .catch(() => {});
   }
 
   private async respond(audio: Float32Array): Promise<void> {
@@ -195,6 +276,7 @@ export class VoiceAgent {
       }
       this.log(`heard: "${heard}" (${sttMs}ms)`);
       this.history.push({ role: "them", text: heard });
+      this.emit("final", heard);
 
       const t1 = Date.now();
       const raw = await this.opts.brain(heard, this.history);
@@ -283,6 +365,27 @@ export class VoiceAgent {
     this.sender.stop();
   }
 
+  /** Seconds since the agent started. */
+  get elapsedSeconds(): number {
+    return (Date.now() - this.startedAt) / 1000;
+  }
+
+  /** True while the far end is mid-utterance. */
+  get farEndSpeaking(): boolean {
+    return this.vad.speaking;
+  }
+
+  /** Send a DTMF digit. */
+  press(digit: string): void {
+    this.media.sendDtmf(digit);
+    this.log(`sent DTMF ${digit}`);
+  }
+
+  /** The id of the utterance currently being recognised, if any. */
+  get currentUtteranceId(): string {
+    return this.utteranceId;
+  }
+
   get turnCount(): number {
     return this.turns;
   }
@@ -299,6 +402,28 @@ export class VoiceAgent {
   private log(msg: string): void {
     this.opts.onLog?.(msg);
   }
+}
+
+/**
+ * Adapt a `VoiceAgent` and its media plane to the HTTP control surface.
+ *
+ * This is the seam an external agent talks to: it never touches this class directly, so the
+ * media path stays independent of whatever is driving the conversation.
+ */
+export function agentControlHost(opts: {
+  agent: VoiceAgent;
+  press: (digit: string) => void;
+  hangup: () => void;
+}): ControlHost {
+  return {
+    say: (text) => opts.agent.say(text),
+    shutUp: () => opts.agent.shutUp(),
+    press: (digit) => opts.press(digit),
+    hangup: () => opts.hangup(),
+    onTranscript: (fn) => opts.agent.onTranscript(fn),
+    isFarEndSpeaking: () => opts.agent.farEndSpeaking,
+    elapsedSeconds: () => opts.agent.elapsedSeconds,
+  };
 }
 
 function concatFrames(parts: Float32Array[]): Float32Array {

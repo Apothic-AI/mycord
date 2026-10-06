@@ -11,7 +11,7 @@ import { MediaPlane } from "./media.ts";
 import { SipSession } from "./registrar.ts";
 import { VoiceAgent, type Brain, type Turn } from "./agent.ts";
 import { PiperTts } from "./tts.ts";
-import { WhisperStt } from "./stt.ts";
+import { createStt } from "./stt.ts";
 
 const argv = process.argv.slice(2);
 const e164Arg = argv[0];
@@ -106,7 +106,8 @@ if (!brain) {
 }
 
 const media = await MediaPlane.create();
-const stt = new WhisperStt({ model: "small.en" });
+// Auto-picks parakeet-redux when its venv is installed, else faster-whisper.
+const stt = await createStt();
 const tts = new PiperTts();
 const started = Date.now();
 const stamp = (): string => `+${((Date.now() - started) / 1000).toFixed(1)}s`;

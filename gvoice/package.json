@@ -9,7 +9,8 @@
     "probe:discover": "node src/probe-discover.ts",
     "probe:media": "node src/probe-media.ts",
     "probe:voice": "node src/probe-voice.ts",
-    "probe:agent": "node src/probe-agent.ts"
+    "probe:agent": "node src/probe-agent.ts",
+    "probe:control": "node src/probe-control.ts"
   },
   "keywords": [],
   "author": "",

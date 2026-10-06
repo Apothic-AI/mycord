@@ -22,7 +22,7 @@ call signaling over SIP-on-WebSocket. **Everything here runs outside the browser
 | Inbound audio, pure Node | ✅ **1852 opus frames decoded, peak 0.66** |
 | Outbound synthesized speech | ✅ **211 opus frames, real-time paced** |
 | Two-way speech, no audio device | ✅ `node src/probe-voice.ts +18003569377` |
-| Local speech-to-text (Whisper) | ✅ full IVR prompts transcribed verbatim |
+| Local speech-to-text (parakeet-redux) | ✅ 0.55 s / utterance, streaming partials |
 | Local neural TTS (Piper) | ✅ ~6x faster than real time on CPU |
 | Full agent loop (VAD → STT → brain → TTS) | ✅ 3-turn live conversation |
 | Inbound audio via headless-Chrome media host | ✅ proven: 5.28 M samples extracted |
@@ -406,6 +406,92 @@ pnpm add -D typescript && pnpm run typecheck
 
 `WhisperStt` auto-detects the venv, then `python3`, then the interpreter behind the `whisper`
 CLI, preferring faster-whisper and falling back to `openai-whisper`.
+
+### Driving the call from another process
+
+This is the shape the whole thing exists for: an external agent — a model, a script, anything
+that can speak HTTP — drives the call without linking against this codebase.
+
+```
+$ node src/probe-control.ts +18003569377 --brain none --token s3cret
+control API: http://127.0.0.1:8787
+  GET  /health
+  GET  /events            (SSE transcript stream)
+  POST /say {"text":..}
+  POST /press {"digit":..}
+  POST /shutup
+  POST /hangup
+```
+
+`tools/agent-example.mjs` is a complete external agent. What it sees while the far end
+speaks, over one SSE connection:
+
+```
+[8.9s] …
+[11.5s] Stay there.
+[14.0s] Hey there, I'm the oneie.
+[15.2s] Hey there, I'm the 1800 slide.
+[17.6s] Hey there, I'm the 1800 Flowers virtual agent.
+[21.1s] Hey there, I'm the 1800 Flowers virtual agent. Do you want to track an order?
+[30.3s] Hey there, I'm the 1800 Flowers virtual agent. Do you want to track an order, re
+[32.7s] …
+
+[32.9s] heard: "Hey there, I'm the 1800 Flowers virtual agent. Do you want to track an
+         order, review delivery info, or ask about something else today?"
+[32.9s] saying: "Track and order."
+```
+
+The partials are the point. Waiting for a settled transcript after a whole turn means the
+agent cannot react to the first clause, and dead air makes the far end think the call
+dropped. Partials arrive while the far end is still talking, with `speech-start`,
+`partial` and `final` events sharing one `utteranceId`, so a caller can start generating on
+the first clause and discard the stub if it is revised.
+
+SSE rather than WebSocket because the traffic is one-directional and `curl -N` can read it,
+which makes the whole thing debuggable from a terminal.
+
+Two things worth knowing:
+
+- **Streaming needs a backend that accepts growing audio.** Whisper only makes sense on a
+  settled utterance, so it emits no partials and the stream degrades to `final` only. This
+  is why parakeet-redux is the default rather than merely a faster alternative.
+- **Double-talk is still hard.** The far end fires a new prompt within a couple of seconds
+  of ours, and a barge-in that is correct for a human is wrong for an impatient IVR: the
+  far end heard our reply ("Did you say track in order?") but then said we cut out. The
+  honest fix is to answer from a partial rather than a final, which the stream now makes
+  possible; the agent is currently conservative and answers on `final`.
+
+### Speech recognition: parakeet-redux
+
+`moondream/parakeet-redux` is NVIDIA's parakeet-tdt-0.6b-v3 quantised to 1.58-bit ternary
+weights — every encoder weight is -1, 0 or +1, so the hot loop is multiply-free. 178 MB,
+CC-BY-4.0.
+
+Measured here, on one 3.5 s utterance, AVX2 only (no AVX-512 VNNI, so well short of the
+advertised 113x):
+
+| backend | turn latency | transcript |
+|---|---|---|
+| **parakeet-redux** | **0.55 s** | `Are you the person who placed the order, or are you the recipient?` |
+| faster-whisper (small.en, int8) | 3.22 s | identical |
+| openai-whisper (turbo, CPU) | ~15 s | identical |
+
+5.9x faster than faster-whisper on this box, and identical output. On AVX-512 VNNI the
+model card reports 113x realtime; this machine got 12x, which is still ~0.25 s for a phone
+utterance.
+
+It is not strictly better than faster-whisper at everything. The ternary encoder's acoustic
+margin is thinner, and the model card is candid that it loses on noisy audio (9.04 vs 6.72
+WER on MUSAN at 0 dB SNR). Telephone audio is noisy. So faster-whisper stays installed as a
+fallback, and `createStt()` picks parakeet-redux when its venv is present.
+
+Also, unlike Whisper, parakeet output is lowercased and unpunctuated — it inherits the
+original's conventions. Fine for a model, less pleasant to read in a log.
+
+```
+$ python3 -m venv ~/.local/share/gvoice/asr-venv
+$ uv pip install --python ~/.local/share/gvoice/asr-venv/bin/python moondream
+```
 
 ### SMS send needs a server-issued token
 

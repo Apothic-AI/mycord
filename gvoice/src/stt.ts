@@ -1,60 +1,56 @@
 /**
- * Speech-to-text for the inbound leg, backed by local Whisper.
+ * Speech-to-text backends, each a long-lived worker process.
  *
- * Uses a persistent Python worker rather than the `whisper` CLI: loading
- * large-v3-turbo costs seconds, and a phone agent transcribes an utterance every
- * few seconds, so a per-turn model load would dominate latency. The worker holds
- * the model in memory and answers one JSON request per line.
+ * Loading a speech model costs seconds, and a phone agent transcribes an utterance every
+ * few seconds, so every backend here keeps its model resident and answers one request per
+ * line over stdin/stdout.
  *
- * `WhisperCliStt` is kept as a zero-setup fallback for machines without the
- * Python package available.
+ * Preference order is deliberate and measured on this project:
+ *
+ *  1. **parakeet-redux** (`moondream/parakeet-redux`) — NVIDIA parakeet-tdt-0.6b-v3 quantised
+ *     to 1.58-bit ternary weights. No multiplies in the hot loop, so it runs at 12x realtime
+ *     on AVX2-only hardware here and 113x on AVX-512 VNNI. A 3 s phone utterance transcribes
+ *     in ~0.25 s versus ~1.8 s for faster-whisper. It also accepts growing audio, which is
+ *     what makes streaming partials possible at all.
+ *  2. **faster-whisper** (CTranslate2 int8) — better on noisy audio, so it stays as a
+ *     fallback. parakeet-redux trades accuracy at low SNR (leaderboard: 9.04 vs 6.72 WER on
+ *     MUSAN), which is not nothing for telephone audio.
+ *  3. **openai-whisper** — last resort. ~15 s per 5 s utterance on CPU-only torch.
+ *
+ * All backends receive 16 kHz mono: Whisper's native rate, and parakeet is happy at it.
  */
 
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
-import { join } from "node:path";
 import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { SAMPLE_RATE, floatToInt16 } from "./audio.ts";
-import type { Transcript } from "./types.ts";
-
-export type { Transcript };
+import type { SttBackend, Transcript } from "./types.ts";
 
 const execFileAsync = promisify(execFile);
-const WORKER = fileURLToPath(new URL("../tools/whisper_worker.py", import.meta.url));
+const TOOLS = fileURLToPath(new URL("../tools/", import.meta.url));
+const PARAKEET_WORKER = join(TOOLS, "parakeet_worker.py");
+const WHISPER_WORKER = join(TOOLS, "whisper_worker.py");
+
+/** Where the model venvs live. Override with GVOICE_PARAKEET_VENV / GVOICE_FW_VENV. */
+const PARAKEET_VENV = process.env.GVOICE_PARAKEET_VENV ?? join(homedir(), ".local", "share", "gvoice", "asr-venv");
+const FW_VENV = process.env.GVOICE_FW_VENV ?? join(homedir(), ".local", "share", "gvoice", "fw-venv");
 
 /**
- * Model sizes, valid for both backends. `small.en` is the sweet spot for phone audio:
- * intelligible speech at a fraction of `turbo`'s cost.
+ * Whisper's native sample rate, and parakeet's expected input rate.
+ *
+ * Handing either backend a 22.05 kHz array reinterpreted at the wrong speed returns
+ * fluent, completely wrong text rather than an error, so resampling happens here rather
+ * than being left to the caller's assumptions.
  */
+const ASR_RATE = 16000;
+
 export type WhisperModel =
   | "tiny" | "tiny.en" | "base" | "base.en" | "small" | "small.en"
   | "medium" | "medium.en" | "turbo" | "large-v3";
-
-export interface SttOptions {
-  language?: string;
-  model?: WhisperModel;
-  /** `cuda` when a GPU is present and the model fits. */
-  device?: "cpu" | "cuda";
-  /**
-   * `faster` is CTranslate2 int8 — ~4x openai-whisper on CPU, with VAD.
-   * `openai` is the reference implementation. Default `auto` prefers `faster`.
-   */
-  backend?: "auto" | "faster" | "openai";
-  /** CTranslate2 compute type for the faster backend. */
-  computeType?: string;
-  /** Interpreter to use. Detected when omitted. */
-  python?: string;
-}
-
-/**
- * Whisper's native sample rate. Both backends expect 16 kHz mono, and faster-whisper
- * assumes it when handed a raw NumPy array — so resample here rather than letting a
- * 22.05 kHz TTS file be reinterpreted at the wrong speed.
- */
-const WHISPER_RATE = 16000;
 
 /** Resample 48 kHz mono Float32 to a 16 kHz mono s16 WAV. */
 async function writeWav(dir: string, pcm: Float32Array): Promise<string> {
@@ -64,7 +60,7 @@ async function writeWav(dir: string, pcm: Float32Array): Promise<string> {
     const child = spawn(
       "ffmpeg",
       ["-v", "error", "-f", "s16le", "-ar", String(SAMPLE_RATE), "-ac", "1", "-i", "-",
-       "-ar", String(WHISPER_RATE), "-ac", "1", "-c:a", "pcm_s16le", "-y", path],
+       "-ar", String(ASR_RATE), "-ac", "1", "-c:a", "pcm_s16le", "-y", path],
       { stdio: ["pipe", "ignore", "pipe"] },
     );
     let err = "";
@@ -79,176 +75,160 @@ async function writeWav(dir: string, pcm: Float32Array): Promise<string> {
   return path;
 }
 
-/** Where the faster-whisper virtualenv is installed by default. */
-const FW_VENV = process.env.GVOICE_FW_VENV ?? join(homedir(), ".local", "share", "gvoice", "fw-venv");
-
-interface Resolved {
-  python: string;
-  backend: "faster" | "openai";
+export interface WorkerOptions {
+  /** Interpreter override. Normally auto-detected. */
+  python?: string;
+  model?: string;
+  device?: "cpu" | "cuda" | "mps";
 }
-
-let resolved: Resolved | undefined;
 
 /**
- * Find an interpreter that can import a Whisper implementation.
- *
- * The `whisper` CLI is often installed somewhere other than the default `python3` — on
- * this machine it lives in a Homebrew Cellar the system interpreter cannot see — and
- * faster-whisper usually lives in its own venv. Probe the candidates once and remember
- * the winner, preferring faster-whisper because openai-whisper's CPU-only torch measured
- * ~15 s for a 5 s utterance, which is far too slow to converse.
+ * Shared plumbing for the worker-process backends: one child process, newline-delimited
+ * JSON, serialised requests, and a ready handshake.
  */
-async function findBackend(explicit?: string, want: SttOptions["backend"] = "auto"): Promise<Resolved> {
-  if (resolved && !explicit) return resolved;
-
-  const candidates: Array<{ python: string; module: string; backend: "faster" | "openai" }> = [];
-  if (explicit) candidates.push({ python: explicit, module: "faster_whisper", backend: "faster" });
-  candidates.push({ python: join(FW_VENV, "bin", "python"), module: "faster_whisper", backend: "faster" });
-  candidates.push({ python: "python3", module: "faster_whisper", backend: "faster" });
-
-  // The interpreter behind the `whisper` console script definitely has openai-whisper.
-  try {
-    const { stdout } = await execFileAsync("sh", ["-c", "command -v whisper"]);
-    const cli = stdout.trim();
-    if (cli) {
-      const { stdout: shebang } = await execFileAsync("sh", ["-c", `head -1 ${JSON.stringify(cli)}`]);
-      const m = /^#!\s*(\S+)/.exec(shebang.trim());
-      if (m?.[1]) candidates.push({ python: m[1], module: "whisper", backend: "openai" });
-    }
-  } catch {
-    /* no whisper CLI on PATH */
-  }
-  candidates.push({ python: "python3", module: "whisper", backend: "openai" });
-
-  for (const c of candidates) {
-    if (want !== "auto" && want !== c.backend) continue;
-    try {
-      await execFileAsync(c.python, ["-c", `import ${c.module}`]);
-      resolved = { python: c.python, backend: c.backend };
-      return resolved;
-    } catch {
-      /* try the next candidate */
-    }
-  }
-  throw new Error(
-    "no Whisper backend found. Install faster-whisper (recommended: pip install faster-whisper " +
-      "into ~/.local/share/gvoice/fw-venv) or openai-whisper, or pass SttOptions.python.",
-  );
-}
-
-/** Local Whisper via a long-lived worker process. */
-export class WhisperStt {
-  readonly name = "whisper-worker";
-  private proc: ChildProcessWithoutNullStreams | undefined;
-  private ready: Promise<void> | undefined;
-  private queue: Promise<unknown> = Promise.resolve();
-  private stopping = false;
+export abstract class WorkerStt implements SttBackend {
+  protected proc: ChildProcessWithoutNullStreams | undefined;
+  protected ready: Promise<void> | undefined;
+  protected spawning: Promise<ChildProcessWithoutNullStreams> | undefined;
+  protected stopping = false;
+  protected queue: Promise<unknown> = Promise.resolve();
   private lineBuffer = "";
-  private pending: Array<(v: Transcript | { error: string }) => void> = [];
+  protected pending: Array<(v: never) => void> = [];
+  protected loadSeconds = 0;
 
-  private readonly opts: SttOptions;
-  constructor(opts: SttOptions = {}) {
-    this.opts = opts;
-  }
+  abstract readonly name: string;
+  abstract readonly args: string[];
+  /** Interpreter that can import this backend's library. */
+  abstract readonly python: string;
 
-  private spawning: Promise<ChildProcessWithoutNullStreams> | undefined;
+  /** Full transcription of settled audio. */
+  abstract transcribe(pcm: Float32Array): Promise<Transcript>;
 
-  private spawnWorker(): Promise<ChildProcessWithoutNullStreams> {
+
+  protected spawnWorker(): Promise<ChildProcessWithoutNullStreams> {
     this.spawning ??= (async () => {
-    const found = await findBackend(this.opts.python, this.opts.backend);
-    const proc = spawn(
-      found.python,
-      [
-        WORKER,
-        `--backend=${found.backend}`,
-        `--model=${this.opts.model ?? "small.en"}`,
-        `--device=${this.opts.device ?? "cpu"}`,
-        `--compute_type=${this.opts.computeType ?? "int8"}`,
-      ],
-      { stdio: ["pipe", "pipe", "pipe"] },
-    );
+      this.stopping = false;
+      const env: Record<string, string> = {};
+      for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
+      // Parakeet pulls in torch and its own thread pool; an empty OMP_NUM_THREADS makes
+      // libgomp abort, so only forward it when actually set.
+      const proc = spawn(this.python, this.args, { stdio: ["pipe", "pipe", "pipe"], env });
 
-    let resolveReady: () => void = () => {};
-    let rejectReady: (e: Error) => void = () => {};
-    this.ready = new Promise<void>((res, rej) => {
-      resolveReady = res;
-      rejectReady = rej;
-    });
-    // A worker that dies mid-call should not hang the agent forever.
-    const failTimer = setTimeout(() => rejectReady(new Error("whisper worker did not become ready")), 180_000);
-    this.ready.then(() => clearTimeout(failTimer), () => clearTimeout(failTimer));
+      let resolveReady: () => void = () => {};
+      let rejectReady: (e: Error) => void = () => {};
+      this.ready = new Promise<void>((res, rej) => {
+        resolveReady = res;
+        rejectReady = rej;
+      });
+      const timer = setTimeout(
+        () => rejectReady(new Error(`${this.name} worker did not become ready`)),
+        300_000,
+      );
+      this.ready.then(() => clearTimeout(timer), () => clearTimeout(timer));
 
-    proc.stdout.setEncoding("utf8");
-    proc.stdout.on("data", (chunk: string) => {
-      this.lineBuffer += chunk;
-      let idx: number;
-      while ((idx = this.lineBuffer.indexOf("\n")) >= 0) {
-        const line = this.lineBuffer.slice(0, idx).trim();
-        this.lineBuffer = this.lineBuffer.slice(idx + 1);
-        if (!line) continue;
-        const msg = JSON.parse(line) as Transcript & { ready?: boolean };
-        if (msg.ready) {
-          resolveReady();
-          continue;
+      proc.stdout.setEncoding("utf8");
+      proc.stdout.on("data", (chunk: string) => {
+        this.lineBuffer += chunk;
+        let idx: number;
+        while ((idx = this.lineBuffer.indexOf("\n")) >= 0) {
+          const line = this.lineBuffer.slice(0, idx).trim();
+          this.lineBuffer = this.lineBuffer.slice(idx + 1);
+          if (!line) continue;
+          let msg: Record<string, unknown>;
+          try {
+            msg = JSON.parse(line) as Record<string, unknown>;
+          } catch {
+            continue;
+          }
+          if (msg.ready === true) {
+            this.loadSeconds = Number(msg.loadSeconds ?? 0);
+            resolveReady();
+            continue;
+          }
+          (this.pending.shift() as ((v: unknown) => void) | undefined)?.(msg);
         }
-        this.pending.shift()?.(msg);
-      }
-    });
-    proc.stderr.setEncoding("utf8");
-    proc.stderr.on("data", () => {});
-    proc.on("exit", (code) => {
-      if (!this.stopping) {
-        const err = new Error(`whisper worker exited with code ${code}`);
-        this.pending.splice(0).forEach((fn) => fn({ error: err.message }));
-        rejectReady(err);
-      }
-      this.proc = undefined;
-    });
-    return proc;
+      });
+      proc.stderr.setEncoding("utf8");
+      // Surface worker diagnostics only if we are not yet ready; later noise is harmless.
+      proc.stderr.on("data", (c: string) => {
+        if (this.ready && !this.settled) process.stderr.write(`[${this.name}] ${c}`);
+      });
+      proc.on("exit", (code) => {
+        if (!this.stopping) {
+          const err = new Error(`${this.name} worker exited with code ${code}`);
+          this.pending.splice(0).forEach((fn) =>
+            (fn as unknown as (v: unknown) => void)({ error: err.message }),
+          );
+          rejectReady(err);
+        }
+        this.proc = undefined;
+      });
+      return proc;
     })();
     return this.spawning;
   }
 
-  /** Ensure the worker is up, loading the model once. */
+  private settled = false;
+
+  /** Start the worker and wait for its ready handshake. */
   async start(): Promise<void> {
+    this.settled = false;
     this.proc ??= await this.spawnWorker();
     await this.ready;
+    this.settled = true;
   }
 
-  /** Transcribe 48 kHz mono Float32 samples. Requests are serialised. */
-  async transcribe(pcm: Float32Array): Promise<Transcript> {
-    const task = this.queue.then(async () => {
-      if (this.stopping) return { text: "", segments: [] };
-      await this.start();
-      const dir = await mkdtemp(join(tmpdir(), "gv-stt-"));
-      try {
-        const wav = await writeWav(dir, pcm);
-        const proc = this.proc;
-        if (!proc) throw new Error("whisper worker is not running");
-        const result = new Promise<Transcript | { error: string }>((resolve) => {
-          this.pending.push(resolve);
-          proc.stdin.write(
-            `${JSON.stringify({ wav, language: this.opts.language ?? "en" })}\n`,
-          );
-        });
-        const res = await result;
-        if ("error" in res) throw new Error(res.error);
-        return res;
-      } finally {
-        await rm(dir, { recursive: true, force: true }).catch(() => {});
-      }
+  /** Seconds spent loading the model, reported in readiness output. */
+  get modelLoadSeconds(): number {
+    return this.loadSeconds;
+  }
+
+  protected request(payload: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const proc = this.proc;
+    if (!proc) return Promise.reject(new Error(`${this.name} worker is not running`));
+    return new Promise((resolve) => {
+      this.pending.push(resolve as (v: never) => void);
+      proc.stdin.write(`${JSON.stringify(payload)}\n`);
     });
-    // Keep the queue alive even when a turn fails.
+  }
+
+  /** Write PCM to a temp WAV, send one request, and clean up. */
+  protected async withWav(
+    pcm: Float32Array,
+    send: (wav: string) => Promise<Record<string, unknown>>,
+  ): Promise<Record<string, unknown>> {
+    const dir = await mkdtemp(join(tmpdir(), "gv-asr-"));
+    try {
+      const wav = await writeWav(dir, pcm);
+      return await send(wav);
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+
+  /** Serialise work and guarantee cleanup even when a turn fails. */
+  protected serialise<T>(fn: () => Promise<T>): Promise<T> {
+    const task = this.queue.then(async () => {
+      if (this.stopping) throw new Error(`${this.name} worker is stopping`);
+      await this.start();
+      return fn();
+    });
     this.queue = task.catch(() => undefined);
     return task;
   }
 
   async stop(): Promise<void> {
-    // Resolve anything in flight as empty text rather than an error: callers routinely stop
-    // the worker while a final turn is still transcribing, and that is not a failure.
+    // Resolve anything in flight as empty text: callers routinely stop the worker while a
+    // final turn is still transcribing, and that is not a failure.
     this.stopping = true;
-    this.pending.splice(0).forEach((fn) => fn({ text: "", segments: [] }));
-    this.proc?.stdin.write("quit\n");
+    this.pending.splice(0).forEach((fn) =>
+      (fn as unknown as (v: unknown) => void)({ text: "", segments: [] }),
+    );
+    try {
+      this.proc?.stdin.write("quit\n");
+    } catch {
+      /* pipe already closed */
+    }
     this.proc?.kill();
     this.proc = undefined;
     this.spawning = undefined;
@@ -256,36 +236,135 @@ export class WhisperStt {
   }
 }
 
-/** Zero-setup fallback: shells out to the `whisper` CLI, loading the model per call. */
-export class WhisperCliStt {
-  readonly name = "whisper-cli";
-  private readonly opts: SttOptions;
+/** parakeet-redux: ternary Parakeet v3. Fastest, and the only one that can stream. */
+export class ParakeetStt extends WorkerStt {
+  readonly name = "parakeet-redux";
+  readonly python: string;
+  private readonly model: string;
+  private readonly device: string;
+
+  constructor(opts: WorkerOptions = {}) {
+    super();
+    this.python = opts.python ?? join(PARAKEET_VENV, "bin", "python");
+    this.model = opts.model ?? process.env.GV_PARAKEET_MODEL ?? "moondream/parakeet-redux";
+    this.device = opts.device ?? process.env.GV_PARAKEET_DEVICE ?? "cpu";
+  }
+
+  readonly args: string[] = [PARAKEET_WORKER];
+
+  async transcribe(pcm: Float32Array): Promise<Transcript> {
+    return this.serialise(async () => {
+      const res = await this.withWav(pcm, (wav) => this.request({ wav, stream: false }));
+      if (res.error) throw new Error(String(res.error));
+      return {
+        text: String(res.text ?? "").trim(),
+        segments: (res.segments as Transcript["segments"] | undefined) ?? [],
+      };
+    });
+  }
+
+  /** Streaming partial: transcribes whatever has accumulated so far. */
+  async partial(pcm: Float32Array): Promise<string> {
+    return this.serialise(async () => {
+      const res = await this.withWav(pcm, (wav) => this.request({ wav, stream: true }));
+      if (res.error) throw new Error(String(res.error));
+      // Too short to transcribe yet: report nothing rather than a guess.
+      if (res.skipped) return "";
+      return String(res.partial ?? "").trim();
+    });
+  }
+}
+
+export interface SttOptions {
+  language?: string;
+  model?: WhisperModel;
+  device?: "cpu" | "cuda";
+  backend?: "auto" | "parakeet" | "faster" | "openai";
+  computeType?: string;
+  python?: string;
+}
+
+/** faster-whisper: CTranslate2 int8, more accurate on noisy audio than parakeet-redux. */
+export class WhisperStt extends WorkerStt {
+  readonly name = "whisper-worker";
+  readonly python: string;
+  readonly args: string[];
+
   constructor(opts: SttOptions = {}) {
-    this.opts = opts;
+    super();
+    this.python = opts.python ?? join(FW_VENV, "bin", "python");
+    this.args = [
+      WHISPER_WORKER,
+      "--backend=faster",
+      `--model=${opts.model ?? "small.en"}`,
+      `--device=${opts.device ?? "cpu"}`,
+      `--compute_type=${opts.computeType ?? "int8"}`,
+    ];
   }
 
   async transcribe(pcm: Float32Array): Promise<Transcript> {
-    const dir = await mkdtemp(join(tmpdir(), "gv-stt-"));
+    return this.serialise(async () => {
+      const res = await this.withWav(pcm, (wav) => this.request({ wav }));
+      if (res.error) throw new Error(String(res.error));
+      return {
+        text: String(res.text ?? "").trim(),
+        segments: (res.segments as Transcript["segments"] | undefined) ?? [],
+      };
+    });
+  }
+}
+
+/**
+ * Pick the best available backend.
+ *
+ * Probes for an interpreter that can import each library rather than trusting the default
+ * `python3`, because these are usually installed into their own venvs and the system
+ * interpreter cannot see them.
+ */
+export async function createStt(opts: SttOptions = {}): Promise<WorkerStt> {
+  const want = opts.backend ?? "auto";
+  const candidates: Array<{ ctor: () => WorkerStt; module: string; kind: string }> = [
+    { ctor: () => new ParakeetStt(opts.python ? { python: opts.python } : {}), module: "moondream", kind: "parakeet" },
+    { ctor: () => new WhisperStt(opts), module: "faster_whisper", kind: "faster" },
+  ];
+
+  if (want !== "auto") {
+    const only = candidates.filter((c) => c.kind === want);
+    if (only.length) return only[0]!.ctor();
+  }
+
+  for (const c of candidates) {
+    if (want !== "auto" && want !== c.kind) continue;
+    const py = c.kind === "parakeet"
+      ? opts.python ?? join(PARAKEET_VENV, "bin", "python")
+      : join(FW_VENV, "bin", "python");
     try {
-      const wav = await writeWav(dir, pcm);
-      const args = [
-        "--model", this.opts.model ?? "turbo",
-        "--language", this.opts.language ?? "en",
-        "--output_format", "json",
-        "--output_dir", dir,
-        "--fp16", "False",
-        "--verbose", "False",
-        wav,
-      ];
-      if (this.opts.device) args.push("--device", this.opts.device);
-      await execFileAsync("whisper", args);
-      const raw = await import("node:fs/promises").then((fs) =>
-        fs.readFile(join(dir, "in.json"), "utf8"),
-      );
-      const parsed = JSON.parse(raw) as { text?: string; segments?: Transcript["segments"] };
-      return { text: (parsed.text ?? "").trim(), segments: parsed.segments ?? [] };
-    } finally {
-      await rm(dir, { recursive: true, force: true }).catch(() => {});
+      await execFileAsync(py, ["-c", `import ${c.module}`]);
+      return c.ctor();
+    } catch {
+      /* try the next candidate */
     }
   }
+
+  // No venv found; fall back to whatever the `whisper` CLI's interpreter can import.
+  try {
+    const { stdout } = await execFileAsync("sh", ["-c", "command -v whisper"]);
+    const cli = stdout.trim();
+    if (cli) {
+      const { stdout: shebang } = await execFileAsync("sh", ["-c", `head -1 ${JSON.stringify(cli)}`]);
+      const m = /^#!\s*(\S+)/.exec(shebang.trim());
+      if (m?.[1]) {
+        await execFileAsync(m[1], ["-c", "import whisper"]);
+        return new WhisperStt({ ...opts, python: m[1] });
+      }
+    }
+  } catch {
+    /* no whisper CLI */
+  }
+
+  throw new Error(
+    "no speech-to-text backend available. Install parakeet-redux (recommended): " +
+      "`uv pip install moondream` into ~/.local/share/gvoice/asr-venv, " +
+      "or faster-whisper into ~/.local/share/gvoice/fw-venv.",
+  );
 }
