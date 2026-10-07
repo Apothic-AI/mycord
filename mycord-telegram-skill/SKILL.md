@@ -55,26 +55,73 @@ Reuses a login the user already has. No phone number, no code, no 2FA, and
 **no secret is ever handed to this skill**. Requires the `tdl` binary.
 
 ```bash
-uv run mycord-telegram-repl login --method desktop
+uv run mycord-telegram-repl login --method desktop   # headless, then:
+uv run mycord-telegram-repl start                    # daemon; waits for auth
+uv run mycord-telegram-repl status                   # who am I connected as
 ```
 
-`tdl` embeds its own `api_id`/`api_hash`, so this works even with an empty
-`.env`.
+This is fully headless — **no TTY, no interactive picker, no manual step**:
 
-**The import is interactive by nature.** `tdl`'s account picker is a TUI, and
-the skill runs it with stdin closed — so on a first run it fails with an
-`Error: EOF`-derived message telling you to run this by hand instead:
-
-```bash
-tdl login -T desktop -d ~/.var/app/org.telegram.desktop/data/TelegramDesktop
-```
-
-Pick the account, then answer **N** when asked whether to log out the desktop
-session. The skill never passes `--logout`, so your Telegram Desktop login
-stays intact either way.
+- `tdl`'s account picker accepts its default on a bare newline, so the skill
+  feeds `\n\nn\n` on stdin instead of closing it. The first newline accepts the
+  highlighted account and the second answers `N` to "log out of the desktop
+  client?", so **the user's Telegram Desktop login survives the import**.
+- `tdl` writes the session *before* asking that logout question, and the
+  question queries cursor position, so under a pipe it always EOFs and `tdl`
+  exits non-zero **after a perfectly good import**. The skill detects the
+  successful import and continues; a non-zero exit on its own is not a failure.
+- `tdl` stores the auth key in its own Bolt file, which Telethon cannot read, so
+  the skill converts it into a `StringSession` (`string_session_from_tdl_storage`)
+  and writes it where the daemon expects, mode `0600`. You do **not** need to run
+  `tdl` by hand, and you do **not** need QR or phone login as a fallback.
 
 Binary: https://github.com/iyear/tdl/releases (single static Go binary,
 install to `~/.local/opt/tdl` and symlink into `~/.local/bin`).
+
+> [!IMPORTANT]
+> `tdl` supplies its own `api_id`/`api_hash` for the import step. **You do not
+> need a `.env` at all for the desktop path.** `load_credentials()` falls back to
+> inert placeholders when neither variable is set, because a session that already
+> carries an auth key never runs a login handshake and Telegram never validates
+> app credentials. Half-configured credentials (only one of the two set) are
+> still an error. QR and phone logins do need real values, since they do
+> handshake.
+
+### Reading vs sending — pick the right client
+
+`tdl` and Telethon are not interchangeable:
+
+| Need | Use |
+| --- | --- |
+| List chats, export history, browse | `tdl chat ls` / `tdl chat export` — works with no Telethon session and no credentials |
+| **Send messages, read replies, click inline buttons** | the REPL over Telethon (`client.send_message`, `client.get_messages`) |
+
+`tdl chat` only offers `export`, `ls`, and `users` — it **cannot send text**. Any
+task that sends a message or taps an inline keyboard button must go through the
+REPL, which is why the desktop import has to produce a `StringSession` at all.
+
+```bash
+# list chats with no credentials at all
+tdl chat ls
+
+# send through the REPL
+uv run mycord-telegram-repl eval "
+chat = await client.get_entity('SupremeLeaderShopBot')
+await client.send_message(chat, '/wallet')"
+```
+
+Read an inline keyboard (shop menus are buttons, not text):
+
+```bash
+uv run mycord-telegram-repl eval "
+chat = await client.get_entity('SupremeLeaderShopBot')
+m = await client.get_messages(chat, limit=1)
+[[b.text for b in row] for row in (m.buttons or [])]"
+```
+
+> [!TIP]
+> Confirm who you are acting as before anything consequential:
+> `(await client.get_me()).username`.
 
 ### Method 2: QR login
 
@@ -107,7 +154,7 @@ all. Use **phone** only as a last resort.
 
 | Method | Needs phone | Needs `api_id` | Secret in skill | Interactive |
 | --- | --- | --- | --- | --- |
-| desktop | no | no | none | yes — account picker |
+| desktop | no | import only | none | no |
 | qr | no | yes | session string | scan |
 | phone | yes | yes | session string | code + 2FA |
 
@@ -278,7 +325,9 @@ cp .env.example .env      # fill in TELEGRAM_API_ID / TELEGRAM_API_HASH
 | `no mycord-telegram session at ...` | not started — run `start` |
 | `missing TELEGRAM_API_ID, TELEGRAM_API_HASH` | register an app at my.telegram.org |
 | `tdl not found on PATH` | install from iyear/tdl releases, or use `--method qr` |
-| `Error: EOF` from `login --method desktop` | `tdl`'s picker is a TUI and needs a TTY — run `tdl login -T desktop -d <path>` by hand, answer **N** to the logout prompt |
+| `Error: EOF` from `login --method desktop` | should no longer happen — the skill feeds newlines rather than closing stdin. If you see it, you are on an old checkout; update so `import_desktop_session` passes `input=`, not `stdin=` |
+| desktop login succeeds but `status` says `not authorized` | fixed: the daemon sets the authorized flag once `get_me()` succeeds. If you see this, you are on an old checkout |
+| `get_me()` works but status says unauthorized | same as above — verify with `(await client.get_me()).username`, which is the ground truth |
 | `tdl timed out` | the picker blocked; run the import once by hand |
 | `FloodWaitError` | rate-limited; wait the interval it reports, page with `offset_id` |
 | history returns empty | forgot to `await` the `TotalList` from `get_messages()` |

@@ -32,9 +32,13 @@ Bot-token auth is deliberately absent from this module.
 """
 
 import asyncio
+import base64
+import ipaddress
 import logging
 import os
+import re
 import shutil
+import struct
 import subprocess
 from pathlib import Path
 from typing import Any, cast
@@ -60,17 +64,37 @@ class AuthError(RuntimeError):
     """Raised when a login method fails or its prerequisites are missing."""
 
 
+# Placeholder app credentials. Only valid alongside an existing auth key,
+# where no login handshake occurs and Telegram never checks them. See
+# Method 1 in SKILL.md.
+PLACEHOLDER_API_ID = 1
+PLACEHOLDER_API_HASH = "0" * 32
+
+
 def load_credentials() -> tuple[int, str]:
     """Read ``api_id`` and ``api_hash`` from the environment.
+
+    Falls back to placeholders when neither is set. Those are only ever
+    meaningful alongside an existing auth key (see Method 1 in SKILL.md); a
+    fresh QR or phone login still needs real values, because it performs a
+    handshake that Telegram validates.
 
     Returns:
         Tuple of (api_id, api_hash).
 
     Raises:
-        AuthError: If either value is missing or ``api_id`` is not an integer.
+        AuthError: If only one value is missing, or ``api_id`` is not an integer.
     """
     api_id_raw = os.environ.get(API_ID_ENV, "").strip()
     api_hash = os.environ.get(API_HASH_ENV, "").strip()
+
+    if not api_id_raw and not api_hash:
+        # A session that already carries an auth key never runs a login
+        # handshake, so Telegram never validates the app credentials - any
+        # well-formed placeholder works. That makes the desktop path usable
+        # with no .env at all, instead of demanding a my.telegram.org signup
+        # for a value that goes unused.
+        return PLACEHOLDER_API_ID, PLACEHOLDER_API_HASH
 
     candidates = ((API_ID_ENV, api_id_raw), (API_HASH_ENV, api_hash))
     missing = [name for name, value in candidates if not value]
@@ -129,13 +153,14 @@ def import_desktop_session(
     has, so no phone number, login code, 2FA password, or secret is ever
     handled by this skill. ``tdl`` embeds its own ``api_id``/``api_hash``.
 
-    ``tdl`` prompts interactively to pick a user id and to optionally log the
-    desktop client out. This function runs it with stdin closed, so it
-    requires the caller to have already run the import once by hand, or to
-    accept ``tdl``'s defaults. It never passes ``--logout``; the desktop
-    session is left intact.
+    ``tdl`` prompts to pick a user id and to optionally log the desktop client
+    out. Both prompts accept their default on a bare newline, so this feeds
+    ``b"\\n\\nn\\n"`` on stdin instead of closing it: the first newline accepts
+    the highlighted account, the second accepts the default answer (``N``) to the
+    logout question. That keeps the desktop session signed in and makes the
+    import work headlessly, with no TTY and no manual step.
 
-    Args:
+    It never passes ``--logout``. Args:
         storage_path: Bolt storage directory for the imported session.
             Defaults to ``~/.tdl/data``.
         desktop_path: Telegram Desktop data directory. Auto-detected if omitted.
@@ -182,33 +207,120 @@ def import_desktop_session(
             text=True,
             timeout=120,
             check=False,
-            stdin=subprocess.DEVNULL,
+            # tdl's account picker and logout question are prompts, not a TUI
+            # that strictly needs a terminal: each accepts its default on a bare
+            # newline. Feeding newlines keeps this headless. Closing stdin (the
+            # previous behaviour) made the picker read EOF and always fail.
+            input="\n\nn\n",
         )
     except subprocess.TimeoutExpired as exc:
         message = (
-            "tdl timed out. It prompts for a user id interactively - run "
-            "`tdl login -T desktop -d <desktop-path>` yourself once to pick an account."
+            "tdl timed out. Pass --desktop-path explicitly if the client is in a "
+            "non-standard location."
         )
         raise AuthError(message) from exc
 
+    combined = (result.stdout or "") + (result.stderr or "")
     if result.returncode != 0:
-        detail = (result.stderr or result.stdout or "").strip()
-        # tdl's account picker is a TUI: with stdin closed it reads EOF and
-        # exits. That is expected non-interactive behaviour, not a real fault,
-        # so point the user at the manual command instead of the raw traceback.
-        if "EOF" in detail:
-            message = (
-                "tdl needs an interactive account pick, and this skill runs it with stdin "
-                "closed. Import once by hand, then retry:\n"
-                f"  tdl login -T desktop -d {desktop}\n"
-                "Answer N when asked whether to log the desktop session out."
+        # tdl writes the session before asking whether to log the desktop client
+        # out. That final question is a full-screen prompt that queries the
+        # cursor position, so under a pipe it always EOFs and tdl exits non-zero
+        # *after* a perfectly good import. Answering it is also irrelevant: we
+        # never pass --logout, so the desktop session stays signed in regardless.
+        if _TDL_IMPORT_OK_RE.search(combined):
+            logger.warning(
+                "tdl exited %s after a successful import; its desktop-logout "
+                "prompt cannot be answered without a TTY. The desktop session "
+                "is left signed in.",
+                result.returncode,
             )
         else:
-            message = f"tdl desktop import failed (exit {result.returncode}): {detail}"
-        raise AuthError(message)
+            message = (
+                f"tdl desktop import failed (exit {result.returncode}): {combined.strip()}"
+            )
+            raise AuthError(message)
 
     logger.info("desktop session imported into %s", storage)
     return storage
+
+
+_TDL_IMPORT_OK_RE = re.compile(r"Import\s+\d+\s+successfully")
+
+_TDL_SESSION_RE = re.compile(
+    rb'"DC":(\d+),"Addr":"([0-9.]+)","AuthKey":"([A-Za-z0-9+/=]+)"'
+)
+
+
+def string_session_from_tdl_storage(storage_path: Path | None = None) -> str:
+    """Build a Telethon ``StringSession`` from a session ``tdl`` already imported.
+
+    ``tdl`` persists the Telegram Desktop auth key in its own Bolt file, which
+    Telethon cannot read. Without this bridge the desktop method stops at the
+    import: the daemon has no session string, so it starts "not authorized" and
+    there is no way forward without a fresh QR or phone login.
+
+    The Bolt value is JSON holding the DC id, the DC address, and the base64
+    auth key. Those map onto Telethon's ``StringSession`` layout, which is a
+    leading version char followed by ``base64url(struct.pack('>B4sH256s',
+    dc_id, ipv4, port, auth_key))``.
+
+    Args:
+        storage_path: Bolt file written by ``tdl``. Defaults to the ``default``
+            namespace under ``~/.tdl/data``.
+
+    Returns:
+        The session string. This grants full account access - never log it.
+
+    Raises:
+        AuthError: If the file is missing, holds no session, or the auth key is
+            the wrong size.
+    """
+    storage = storage_path or (Path.home() / ".tdl" / "data" / "default")
+    try:
+        raw = storage.read_bytes()
+    except OSError as exc:
+        message = f"cannot read tdl storage at {storage}: {exc}"
+        raise AuthError(message) from exc
+
+    match = _TDL_SESSION_RE.search(raw)
+    if match is None:
+        message = (
+            f"no Telegram session found in {storage}. Run the desktop import "
+            "first (mycord-telegram-repl login --method desktop)."
+        )
+        raise AuthError(message)
+
+    dc_id = int(match.group(1))
+    address = match.group(2).decode()
+    auth_key = base64.b64decode(match.group(3))
+    if len(auth_key) != 256:
+        message = f"unexpected auth key length {len(auth_key)} in {storage}"
+        raise AuthError(message)
+
+    packed = struct.pack(
+        ">B4sH256s",
+        dc_id,
+        ipaddress.ip_address(address).packed,
+        443,
+        auth_key,
+    )
+    session_string = "1" + base64.urlsafe_b64encode(packed).decode()
+
+    # Verify it against Telethon's own parser before handing it back, so a
+    # malformed session fails here rather than as a silent "not authorized".
+    try:
+        from telethon.sessions import StringSession
+
+        parsed = StringSession(session_string)
+    except Exception as exc:
+        message = f"constructed session failed Telethon validation: {exc}"
+        raise AuthError(message) from exc
+    if parsed.dc_id != dc_id or not parsed.auth_key:
+        message = "constructed session did not round-trip through Telethon"
+        raise AuthError(message)
+
+    logger.info("built StringSession for dc %s (%s)", dc_id, parsed.server_address)
+    return session_string
 
 
 async def qr_login(client: Any) -> str:

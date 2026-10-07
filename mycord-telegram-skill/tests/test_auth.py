@@ -13,6 +13,8 @@ import pytest
 from mycord_telegram_repl.auth import (
     API_HASH_ENV,
     API_ID_ENV,
+    PLACEHOLDER_API_HASH,
+    PLACEHOLDER_API_ID,
     STRING_SESSION_ENV,
     AuthError,
     find_desktop_client,
@@ -38,10 +40,23 @@ def test_credentials_parse_from_environment(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 @pytest.mark.unit
-def test_missing_both_names_both_env_vars(monkeypatch: pytest.MonkeyPatch) -> None:
-    with pytest.raises(AuthError, match=API_ID_ENV) as excinfo:
+def test_neither_set_falls_back_to_placeholders(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An existing auth key needs no app credentials, so blanks are fine."""
+    monkeypatch.delenv(API_ID_ENV, raising=False)
+    monkeypatch.delenv(API_HASH_ENV, raising=False)
+    api_id, api_hash = load_credentials()
+    assert api_id == PLACEHOLDER_API_ID
+    assert api_hash == PLACEHOLDER_API_HASH
+
+
+@pytest.mark.unit
+def test_partial_credentials_still_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Half-configured credentials are a mistake, not a request for placeholders."""
+    monkeypatch.delenv(API_ID_ENV, raising=False)
+    monkeypatch.delenv(API_HASH_ENV, raising=False)
+    monkeypatch.setenv(API_ID_ENV, "12345")
+    with pytest.raises(AuthError, match=API_HASH_ENV):
         load_credentials()
-    assert API_HASH_ENV in str(excinfo.value)
 
 
 @pytest.mark.unit
@@ -68,7 +83,9 @@ def test_whitespace_only_counts_as_missing(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 @pytest.mark.unit
-def test_error_points_at_my_telegram_org(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_partial_error_points_at_my_telegram_org(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(API_ID_ENV, raising=False)
+    monkeypatch.setenv(API_HASH_ENV, "deadbeef")
     with pytest.raises(AuthError, match=r"my\.telegram\.org"):
         load_credentials()
 
@@ -184,17 +201,41 @@ def test_import_never_passes_logout(monkeypatch: pytest.MonkeyPatch, tmp_path: P
 
     assert "--logout" not in captured["cmd"]
     assert storage == tmp_path / "storage"
-    # subprocess.DEVNULL is the int sentinel -3, not an enum member.
-    import subprocess as sp
-
-    assert captured["kwargs"]["stdin"] == sp.DEVNULL
+    # stdin is fed newlines, not closed: tdl's account picker accepts its
+    # default on a bare newline, so the import stays headless without a TTY.
+    assert captured["kwargs"]["input"]
+    assert "stdin" not in captured["kwargs"]
 
 
 @pytest.mark.unit
-def test_import_explains_tui_eof_instead_of_dumping_traceback(
+def test_import_survives_unanswered_logout_prompt(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """tdl's picker is a TUI; with stdin closed it exits on EOF, not a real fault."""
+    """tdl imports first, then asks about logging out; that EOF must not fail us."""
+    monkeypatch.setattr("mycord_telegram_repl.auth.require_tdl", lambda: "/usr/bin/tdl")
+    desktop = tmp_path / "TelegramDesktop"
+    (desktop / "tdata").mkdir(parents=True)
+
+    class Result:
+        returncode = 1
+        stdout = "Import 8188043924 successfully to 'default' namespace!"
+        stderr = "Do you want to logout existing desktop session?\nError: EOF"
+
+    monkeypatch.setattr("mycord_telegram_repl.auth.subprocess.run", lambda cmd, **kw: Result())
+
+    from mycord_telegram_repl.auth import import_desktop_session
+
+    # The session is already written, so a non-zero exit from the trailing
+    # logout question must be tolerated rather than raised.
+    storage = import_desktop_session(tmp_path / "storage", desktop_path=desktop)
+    assert storage == tmp_path / "storage"
+
+
+@pytest.mark.unit
+def test_import_raises_when_tdl_really_fails(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A genuine failure still raises, and does not dump a traceback."""
     monkeypatch.setattr("mycord_telegram_repl.auth.require_tdl", lambda: "/usr/bin/tdl")
     desktop = tmp_path / "TelegramDesktop"
     (desktop / "tdata").mkdir(parents=True)
@@ -202,7 +243,7 @@ def test_import_explains_tui_eof_instead_of_dumping_traceback(
     class Result:
         returncode = 1
         stdout = ""
-        stderr = "Choose a user id:\nError: EOF"
+        stderr = "no tdata found"
 
     monkeypatch.setattr("mycord_telegram_repl.auth.subprocess.run", lambda cmd, **kw: Result())
 
@@ -211,10 +252,7 @@ def test_import_explains_tui_eof_instead_of_dumping_traceback(
     with pytest.raises(AuthError) as excinfo:
         import_desktop_session(tmp_path / "storage", desktop_path=desktop)
 
-    message = str(excinfo.value)
-    assert "interactive" in message
-    assert "Answer N" in message
-    assert str(desktop) in message
+    assert "no tdata found" in str(excinfo.value)
 
 
 @pytest.mark.unit
@@ -237,7 +275,7 @@ def test_import_raises_on_nonzero_exit(monkeypatch: pytest.MonkeyPatch, tmp_path
 
 
 @pytest.mark.unit
-def test_import_timeout_explains_interactive_prompt(
+def test_import_timeout_explains_desktop_path(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     import subprocess as sp
@@ -253,7 +291,7 @@ def test_import_timeout_explains_interactive_prompt(
 
     from mycord_telegram_repl.auth import import_desktop_session
 
-    with pytest.raises(AuthError, match="interactively"):
+    with pytest.raises(AuthError, match="desktop-path"):
         import_desktop_session(tmp_path / "storage", desktop_path=desktop)
 
 
@@ -335,3 +373,59 @@ def test_save_session_reports_write_failure(tmp_path: Path) -> None:
     blocker.write_text("i am a file, not a directory")
     with pytest.raises(AuthError, match="could not write"):
         save_session_string("value", blocker / "sub" / "session.txt")
+
+
+@pytest.mark.unit
+def test_string_session_from_tdl_storage_round_trips(tmp_path: Path) -> None:
+    """The Bolt blob tdl writes must become a usable Telethon StringSession."""
+    import base64
+
+    from mycord_telegram_repl.auth import string_session_from_tdl_storage
+
+    auth_key = bytes(range(256))
+    blob = (
+        b'{"TmpSessions":0,"WebfileDCID":4},"DC":2,"Addr":"149.154.167.51",'
+        b'"AuthKey":"'
+        + base64.b64encode(auth_key)
+        + b'","AuthKeyID":"x","Salt":0}}'
+    )
+    storage = tmp_path / "default"
+    storage.write_bytes(blob)
+
+    session_string = string_session_from_tdl_storage(storage)
+
+    from telethon.sessions import StringSession
+
+    parsed = StringSession(session_string)
+    assert parsed.dc_id == 2
+    assert parsed.server_address == "149.154.167.51"
+    assert parsed.auth_key.key == auth_key
+
+
+@pytest.mark.unit
+def test_string_session_from_tdl_storage_requires_a_session(tmp_path: Path) -> None:
+    from mycord_telegram_repl.auth import string_session_from_tdl_storage
+
+    storage = tmp_path / "default"
+    storage.write_bytes(b"\x00\x00\x00\x00 no session here")
+
+    with pytest.raises(AuthError, match="no Telegram session found"):
+        string_session_from_tdl_storage(storage)
+
+
+@pytest.mark.unit
+def test_string_session_from_tdl_storage_rejects_short_key(tmp_path: Path) -> None:
+    import base64
+
+    from mycord_telegram_repl.auth import string_session_from_tdl_storage
+
+    blob = (
+        b'"DC":1,"Addr":"149.154.175.53","AuthKey":"'
+        + base64.b64encode(b"too short")
+        + b'"'
+    )
+    storage = tmp_path / "default"
+    storage.write_bytes(blob)
+
+    with pytest.raises(AuthError, match="unexpected auth key length"):
+        string_session_from_tdl_storage(storage)

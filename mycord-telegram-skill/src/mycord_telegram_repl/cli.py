@@ -185,6 +185,7 @@ def cmd_login(args: argparse.Namespace) -> int:
         phone_login,
         qr_login,
         save_session_string,
+        string_session_from_tdl_storage,
     )
 
     _load_dotenv()
@@ -192,14 +193,19 @@ def cmd_login(args: argparse.Namespace) -> int:
     try:
         if args.method == "desktop":
             storage = import_desktop_session(desktop_path=args.desktop_path)
+            # tdl keeps the auth key in its own Bolt store, which Telethon cannot
+            # read, so bridge it into the StringSession the daemon actually uses.
+            session_string = string_session_from_tdl_storage(storage / "default")
+            if args.print_only:
+                print(session_string)
+                return EXIT_OK
+            target = args.session_file or default_session_file()
+            save_session_string(session_string, target)
             print(
-                "Desktop session imported. Note: tdl stores its own session and\n"
-                "this skill reads it via TELEGRAM_TDL_STORAGE, or run\n"
-                "`tdl` directly for reads. To get a Telethon StringSession instead,\n"
-                "re-run with --method qr or --method phone.",
-                file=sys.stderr,
+                f"Desktop session imported and converted. session saved to {target}\n"
+                "No api_id/api_hash needed: an existing auth key never runs a login\n"
+                "handshake, so the daemon falls back to inert placeholders."
             )
-            print(f"storage: {storage}")
             return EXIT_OK
 
         api_id, api_hash = load_credentials()

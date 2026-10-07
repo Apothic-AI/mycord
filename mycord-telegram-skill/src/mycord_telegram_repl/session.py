@@ -119,6 +119,7 @@ class ReplSession:
         self._resolved_api_id: int | None = None
         self._resolved_api_hash: str | None = None
         self._ready = False
+        self._me: Any = None
         self._connect_task: asyncio.Task[None] | None = None
         self._started_at = time.time()
 
@@ -144,9 +145,10 @@ class ReplSession:
     @property
     def authorized(self) -> bool:
         """Whether Telegram currently reports this session as logged in."""
-        return bool(getattr(self.client, "is_user_authorized", None)) and bool(
-            self.client.session.auth_key
-        )
+        probe = getattr(self.client, "is_user_authorized", None)
+        if callable(probe):
+            probe = probe()
+        return bool(probe) and bool(self.client.session.auth_key)
 
     async def wait_ready(self, timeout: float = 30.0) -> bool:
         """Block until the client is connected and authorized.
@@ -214,8 +216,15 @@ class ReplSession:
         try:
             await self.client.start()
             self._ready = True
-            me = await self.client.get_me()
-            logger.info("telegram ready: user=%s id=%s", me, getattr(me, "id", None))
+            self._me = await self.client.get_me()
+            # A session restored from an existing auth key (the desktop import)
+            # never runs an interactive sign-in, so Telethon leaves
+            # _self_user/_is_user_authorized unset even though the account is
+            # fully usable. Cache the real identity so status() reports it
+            # instead of sending the next agent chasing a phantom auth failure.
+            logger.info(
+                "telegram ready: user=%s id=%s", self._me, getattr(self._me, "id", None)
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -242,11 +251,15 @@ class ReplSession:
 
     def status(self) -> dict[str, Any]:
         """Summarise session health for the ``status`` opcode."""
-        me = getattr(self.client, "_self_user", None) if self._ready else None
+        me = self._me if self._ready else None
         return {
             "connected": self._ready,
             "authorized": self.authorized,
-            "user": str(me) if me else None,
+            "user": (
+                f"@{me.username} (id={me.id})"
+                if me is not None and getattr(me, "username", None)
+                else (f"id={me.id}" if me is not None else None)
+            ),
             "user_id": str(getattr(me, "id", None)) if me else None,
             "uptime_seconds": round(time.time() - self._started_at, 3),
             "globals": sorted(k for k in self.namespace if not k.startswith("__")),
