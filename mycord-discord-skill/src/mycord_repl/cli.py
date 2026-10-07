@@ -12,7 +12,7 @@ Typical agent loop::
     mycord-repl start
     mycord-repl eval "guild = client.fetch_guild(123)"
     mycord-repl eval "channel = guild.get_channel(456)"
-    mycord-repl eval "[m.content for m in await channel.history(limit=10).flatten()]"
+    mycord-repl eval "[m.content async for m in channel.history(limit=10)]"
     mycord-repl stop
 """
 

@@ -6,7 +6,7 @@ globals survive between evaluations, an agent can do this::
 
     eval "guild = client.fetch_guild(123)"
     eval "channel = guild.get_channel(456)"
-    eval "[m.content for m in await channel.history(limit=5).flatten()]"
+    eval "[m.content async for m in channel.history(limit=5)]"
 
 ...and the second call sees the objects the first one created. That is the
 "REPL-like" property: one login, many small steps.
@@ -92,6 +92,7 @@ class ReplSession:
         self.client.event(self._on_ready)
 
         self.namespace: dict[str, Any] = {
+            "asyncio": asyncio,
             "discord": discord,
             "client": self.client,
             "session": self,

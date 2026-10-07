@@ -33,13 +33,16 @@ uv run mycord-repl status
 uv run mycord-repl eval "client.user.id"
 uv run mycord-repl eval "guild = client.get_guild(GUILD_ID)"
 uv run mycord-repl eval "[(c.id, c.name) for c in guild.text_channels]"
-uv run mycord-repl eval "[m.content for m in await guild.text_channels[0].history(limit=10).flatten()]"
+uv run mycord-repl eval "[m.content async for m in guild.text_channels[0].history(limit=10)]"
 
 uv run mycord-repl stop
 ```
 
 Top-level `await` works, trailing expressions return their value, and `print()`
-output is echoed back. Errors surface as tracebacks with a non-zero exit.
+output is echoed back. The namespace preloads `asyncio` for background tasks.
+Errors surface as tracebacks with a non-zero exit. `eval` requests default to a
+30-second timeout; use `--timeout` for short waits or schedule a persistent
+`asyncio.create_task(...)` and poll it for long waits.
 
 ## How it works
 

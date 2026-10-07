@@ -85,8 +85,10 @@ async def test_discord_is_passthrough_available(session: ReplSession) -> None:
 
 @pytest.mark.unit
 async def test_client_and_helpers_are_preloaded(session: ReplSession) -> None:
-    value, _ = await session.execute("[callable(wait_ready), hasattr(client, 'guilds')]")
-    assert value == [True, True]
+    value, _ = await session.execute(
+        "[callable(wait_ready), hasattr(client, 'guilds'), hasattr(asyncio, 'create_task')]"
+    )
+    assert value == [True, True, True]
 
 
 @pytest.mark.unit

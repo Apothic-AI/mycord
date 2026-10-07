@@ -78,20 +78,21 @@ uv run mycord-repl eval "client.user.id"
 uv run mycord-repl eval "\
 guild = client.get_guild(GUILD_ID)
 channel = next(c for c in guild.channels if c.name == 'general')
-[(m.id, m.author, m.content) for m in await channel.history(limit=20).flatten()]
+msgs = [m async for m in channel.history(limit=20)]
+[(m.id, m.author, m.content) for m in msgs]
 "
 ```
 
-Note `history()` is a **lazy iterator** — you must `await ....flatten()` or
-`await ....get()` to materialise it. Forgetting `flatten()` returns an empty
-`LazyFlatMap`, not an error, which is the single most common mistake here.
+`history()` is an async iterator in current `discord.py-self` releases. Materialise
+it with `[m async for m in channel.history(limit=N)]`; do not use the removed
+`.flatten()`/`.get()` helpers. Use a bounded `limit` for interactive reads.
 
 ### Search backwards from a known point
 
 ```bash
 uv run mycord-repl eval "\
 channel = client.get_channel(CHANNEL_ID)
-msgs = await channel.history(limit=500).flatten()
+msgs = [m async for m in channel.history(limit=500)]
 [m.content for m in msgs if 'deploy' in m.content.lower()]
 "
 ```
@@ -99,7 +100,7 @@ msgs = await channel.history(limit=500).flatten()
 State persists, so fetch once and then filter repeatedly:
 
 ```bash
-uv run mycord-repl eval "msgs = await channel.history(limit=500).flatten()"
+uv run mycord-repl eval "msgs = [m async for m in channel.history(limit=500)]"
 uv run mycord-repl eval "[m.author.name for m in msgs][:10]"
 uv run mycord-repl eval "sum(1 for m in msgs if m.mentions)"
 ```
@@ -121,17 +122,34 @@ uv run mycord-repl eval "await msg.delete()"
 ### Wait for the next message
 
 ```bash
-uv run mycord-repl eval "m = await client.wait_for('message', timeout=30); (m.author, m.content)"
+# Short wait: the CLI request can stay open when the timeout fits the eval budget.
+uv run mycord-repl eval --timeout 40 "m = await client.wait_for('message', timeout=30); (m.author, m.content)"
 ```
+
+For a long-lived wait, do not hold an `eval` request open. The daemon's default
+eval timeout is 30 seconds even if `client.wait_for()` has a longer timeout.
+Start a background task, then poll it from later evals:
+
+```bash
+uv run mycord-repl eval "pending = asyncio.create_task(client.wait_for('message', check=lambda m: m.author.id == USER_ID))"
+uv run mycord-repl eval "(pending.done(), pending.result().content if pending.done() else None)"
+```
+
+The `asyncio` module is preloaded in the REPL namespace. Cancel a pending task
+when the wait is no longer needed: `uv run mycord-repl eval "pending.cancel()"`.
 
 ### Read a DM
 
 ```bash
 uv run mycord-repl eval "\
-dm = next(c for c in client.private_channels if c.recipient.id == USER_ID)
-[(m.author, m.content) for m in await dm.history(limit=10).flatten()]
+dm = next(c for c in client.private_channels if getattr(c, 'recipient', None) is not None and c.recipient.id == USER_ID)
+msgs = [m async for m in dm.history(limit=10)]
+[(m.author, m.content) for m in msgs]
 "
 ```
+
+`client.private_channels` also contains group DMs, which have `recipients` and
+no `.recipient`; always guard the attribute when selecting a one-to-one DM.
 
 ---
 
@@ -154,7 +172,8 @@ uv run mycord-repl eval "print([(c.name) for c in client.get_guild(123).text_cha
 Other habits that pay off:
 
 * Bind a name (`channel = ...`) and reuse it next call instead of re-resolving.
-* When a lazy iterator surprises you, wrap it in `list(...)` or check `len()`.
+* When reading history, use `[m async for m in channel.history(limit=N)]` and
+  bind the result before filtering it repeatedly.
 * Use `--file snippet.py` for anything longer than a couple of lines — easier
   to edit and re-run than a giant quoted string.
 * `reset` clears your globals but keeps the connection, handy when names get
@@ -284,7 +303,7 @@ human is going to read it.
 | --- | --- |
 | `no mycord session at ...` | not started, or already stopped — run `start` |
 | `LoginFailure` | token is wrong or revoked; re-extract it |
-| history returns empty | forgot `await ....flatten()` |
+| history returns empty | use `[m async for m in channel.history(limit=N)]`; current releases do not provide `.flatten()` |
 | `AttributeError` on a channel method | you may be holding a `ForumChannel`/partial; re-fetch with `get_channel` |
 | session hangs | a snippet is blocked; the default eval timeout is 30s, raise with `--timeout` |
 | `timed out` | the awaited call outran its budget; split it or raise `--timeout` |
