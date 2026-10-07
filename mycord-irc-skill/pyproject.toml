@@ -1,0 +1,109 @@
+[build-system]
+requires = ["setuptools>=84.0.0", "wheel>=0.48.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mycord-irc-repl"
+version = "0.1.0"
+description = "Persistent REPL-style session over pydle for agent-driven IRC automation"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [
+    {name = "Apothic Team"}
+]
+license = {text = "MIT"}
+keywords = ["irc", "pydle", "repl", "agent", "automation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+
+# pydle's coroutine-based API fits the persistent asyncio REPL directly.
+# The sasl extra enables networks that require SASL PLAIN authentication.
+dependencies = [
+    "pydle[sasl]>=1.2.0,<2.0",
+    "python-dotenv>=1.2.4",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.16.10",
+    "mypy>=2.4.0",
+]
+
+[project.scripts]
+mycord-irc-repl = "mycord_irc_repl.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["mycord_irc_repl*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = [
+    "-v",
+    "--strict-markers",
+]
+markers = [
+    "unit: Unit tests for pure functions and contracts",
+    "integration: Tests that exercise a live daemon over a real socket",
+]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "W",
+    "F",
+    "I",
+    "N",
+    "UP",
+    "ANN",
+    "S",
+    "B",
+    "C4",
+    "DTZ",
+    "EM",
+    "G",
+    "PIE",
+    "T20",
+    "PT",
+    "RUF",
+]
+ignore = [
+    "S101",
+    "ANN401",
+    "N818",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S106", "ANN", "PLR2004", "ARG001", "S108"]
+"src/mycord_irc_repl/cli.py" = ["T201", "S112"]
+"src/mycord_irc_repl/session.py" = ["S307", "T201"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_return_any = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["mycord_irc_repl"]

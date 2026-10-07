@@ -38,6 +38,9 @@ ENV/
 .ruff_cache/
 .mypy_cache/
 
+# Transient agent working notes
+.agent-context/
+
 # Editors
 .vscode/
 .idea/
