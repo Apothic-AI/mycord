@@ -93,7 +93,7 @@ class ReplSession:
     Attributes:
         client: The connected :class:`telethon.TelegramClient`.
         namespace: Globals shared across every evaluated snippet.
-        authorized: Whether Telegram reports the session as logged in.
+        authorized: Whether the session holds a cached, logged-in identity.
     """
 
     def __init__(self, session_string: str | None = None, api_id: int | None = None,
@@ -144,11 +144,17 @@ class ReplSession:
 
     @property
     def authorized(self) -> bool:
-        """Whether Telegram currently reports this session as logged in."""
-        probe = getattr(self.client, "is_user_authorized", None)
-        if callable(probe):
-            probe = probe()
-        return bool(probe) and bool(self.client.session.auth_key)
+        """Whether this session holds a usable, logged-in identity.
+
+        Derived from the identity cached at connect time rather than from
+        ``client.is_user_authorized()``. That is a coroutine, and ``status()``
+        is sync, so it cannot be awaited here; calling it anyway returned a bare
+        truthy coroutine, which both reported every session as authorized and
+        leaked a never-awaited coroutine. ``_me`` is set only after
+        ``get_me()`` succeeds, which happens only for a genuinely authorized
+        account.
+        """
+        return self._me is not None and bool(self.client.session.auth_key)
 
     async def wait_ready(self, timeout: float = 30.0) -> bool:
         """Block until the client is connected and authorized.
@@ -218,10 +224,10 @@ class ReplSession:
             self._ready = True
             self._me = await self.client.get_me()
             # A session restored from an existing auth key (the desktop import)
-            # never runs an interactive sign-in, so Telethon leaves
-            # _self_user/_is_user_authorized unset even though the account is
-            # fully usable. Cache the real identity so status() reports it
-            # instead of sending the next agent chasing a phantom auth failure.
+            # never runs an interactive sign-in, so Telethon caches nothing in
+            # _self_user even though the account is fully usable. Hold on to the
+            # real identity: it is what authorized and status() report from, so
+            # the next agent is not sent chasing a phantom auth failure.
             logger.info(
                 "telegram ready: user=%s id=%s", self._me, getattr(self._me, "id", None)
             )

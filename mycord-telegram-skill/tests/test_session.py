@@ -5,6 +5,8 @@ stdout capture, and error reporting. None of them touch the network: the
 session is constructed without a token, so the client never connects.
 """
 
+from types import SimpleNamespace
+
 import pytest
 
 from mycord_telegram_repl.session import ReplSession
@@ -120,6 +122,33 @@ def test_offline_session_reports_disconnected(session: ReplSession) -> None:
     assert status["user"] is None
     assert status["authorized"] is False
     assert "client" in status["globals"]
+
+
+@pytest.mark.unit
+def test_authorized_requires_a_cached_identity(session: ReplSession) -> None:
+    """An auth key alone must not read as authorized.
+
+    is_user_authorized() is a coroutine, so a sync status() cannot ask
+    Telegram; it used to call it anyway and treat the un-awaited coroutine as a
+    truthy answer, reporting every session as authorized.
+    """
+    assert session.authorized is False
+
+    session.client.session.auth_key = b"\x01" * 256
+    assert session.authorized is False
+
+
+@pytest.mark.unit
+def test_authorized_once_identity_is_cached(session: ReplSession) -> None:
+    """get_me() succeeding is what makes a session authorized."""
+    session.client.session.auth_key = b"\x01" * 256
+    session._ready = True
+    session._me = SimpleNamespace(username="someone", id=4242)
+
+    assert session.authorized is True
+    status = session.status()
+    assert status["authorized"] is True
+    assert status["user"] == "@someone (id=4242)"
 
 
 @pytest.mark.unit
