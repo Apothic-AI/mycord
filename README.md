@@ -1,11 +1,11 @@
 # mycord
 
-Chat-platform automation, split into **independent** components: two for
+Chat-platform automation, split into **independent** components: one for
 Discord on [`discord.py-self`][dps], one for Telegram on
 [`telethon`][telethon], one for IRC on [`pydle`][pydle], and one for Google
 Voice on [`werift`][werift].
 
-> **The Discord components are selfbots.** They log in as a Discord *user*,
+> **The Discord component is a selfbot.** It logs in as a Discord *user*,
 > not a bot. That violates Discord's Terms of Service and **can get the account
 > permanently banned**. Use a throwaway personal account only — never a work,
 > shared, or customer-facing one.
@@ -15,47 +15,29 @@ Voice on [`werift`][werift].
 > than forbidden.
 >
 > **`gvoice/` is an unofficial Google Voice client**, reverse-engineered from
-> traffic. It is unsupported, Google can change or withdraw it at any time, and
-> automating a Google account may violate Google's Terms of Service. That call
-> is yours to make.
+> traffic. Automating a Google account may violate Google's Terms of Service.
 
 ## Components
 
 | Directory | What it is | Depends on the other? |
 | --- | --- | --- |
-| [`mycord-discord-mcp/`](mycord-discord-mcp/) | FastMCP server exposing Discord tools over the Model Context Protocol | no |
 | [`mycord-discord-skill/`](mycord-discord-skill/) | Agent skill: Discord as a Python library via a persistent REPL | no |
 | [`mycord-telegram-skill/`](mycord-telegram-skill/) | Agent skill: Telegram as a Python library via a persistent REPL | no |
 | [`mycord-irc-skill/`](mycord-irc-skill/) | Agent skill: IRC as a Python library via a persistent REPL | no |
 | [`gvoice/`](gvoice/) | Unofficial Google Voice client in TypeScript: SMS over HTTP, calls over SIP-on-WebSocket | no |
 
-The two Discord components share this repository and the `discord.py-self`
-dependency, and nothing else. Neither imports the other, and you can use either
-one without touching the other. Telegram and IRC are separate platforms and
-share no code with the Discord components or each other, only the
+Every component stands alone. Telegram and IRC are separate platforms and
+share no code with the Discord component or each other, only the
 persistent-REPL shape. `gvoice/` shares the repository and nothing else: it is
 TypeScript, it is a library rather than a REPL, and it carries its own runtime
 (`werift`, `opus-decoder`, Node's native TypeScript stripping).
 
-### `mycord-discord-mcp/` — MCP server
-
-For MCP clients. Exposes tools (currently a health check) over a stdio
-transport, with connection state reported through a Pydantic contract.
-
-```bash
-cd mycord-discord-mcp
-uv sync --all-extras
-cp .env.example .env      # fill in DISCORD_TOKEN
-uv run python -m mycord.app.server
-```
-
-See [`mycord-discord-mcp/README.md`](mycord-discord-mcp/README.md).
-
 ### `mycord-discord-skill/` — agent skill
 
-For agents and operators. Drives the same library interactively: one login,
-then many small Python steps that share state, with top-level `await` and
-discord.py-self passed straight through.
+For agents and operators, and the supported path for Discord. Drives
+`discord.py-self` interactively: one login, then many small Python steps that
+share state, with top-level `await` and discord.py-self passed straight
+through.
 
 ```bash
 cd mycord-discord-skill
@@ -132,30 +114,21 @@ traps that cost real debugging time in [`gvoice/README.md`](gvoice/README.md).
 
 ## Which one should I use?
 
-* A **MCP client** (Claude Desktop, an MCP host, another agent runtime) wants
-  `mycord-discord-mcp/` — it speaks the protocol over stdio.
-* You are **writing code or exploring interactively** wants `mycord-discord-skill/` —
-  it is a Python library and REPL, with no protocol layer in the way.
-* Wanting tool-level control over *exact* calls, or reading code you can edit,
-  both point at `mycord-discord-skill/`.
+* You want **Discord** — `mycord-discord-skill/`, whether you are writing code
+  or exploring interactively. It is a Python library and a REPL, so you get
+  tool-level control over *exact* calls and code you can edit, with no protocol
+  layer in the way.
 * You want **Telegram**, or you want a chat platform that is not a selfbot —
   `mycord-telegram-skill/`.
-* You want **IRC**, with a live asynchronous client and no MCP layer —
+* You want **IRC**, with a live asynchronous client and no protocol layer —
   `mycord-irc-skill/`.
 * You want **real voice calls or SMS without a browser** — `gvoice/`, which
-  carries the unofficial-and-may-break caveat instead of the selfbot one.
+  carries the unofficial-client caveat instead of the selfbot one.
 
 ## Layout
 
 ```
 mycord/
-├── mycord-discord-mcp/           # FastMCP server component
-│   ├── mycord/
-│   │   ├── core/         # Pydantic contracts (no external deps)
-│   │   ├── adapters/     # discord.py-self wrapper
-│   │   └── app/          # FastMCP orchestration
-│   ├── tests/
-│   └── pyproject.toml
 ├── mycord-discord-skill/         # Discord agent skill component
 │   ├── src/mycord_repl/  # session daemon + CLI
 │   ├── tests/
@@ -175,12 +148,11 @@ mycord/
 └── docs/archive/         # historical research notes
 ```
 
-The four Python components are standalone projects with their own
+The three Python components are standalone projects with their own
 `pyproject.toml`; `gvoice/` is a standalone pnpm workspace with its own
 `package.json` and lockfile.
 
 ```bash
-cd mycord-discord-mcp     && uv sync --all-extras && uv run pytest
 cd mycord-discord-skill   && uv sync --all-extras && uv run pytest
 cd mycord-telegram-skill  && uv sync --all-extras && uv run pytest
 cd mycord-irc-skill       && uv sync --all-extras && uv run pytest
@@ -190,10 +162,6 @@ cd gvoice                 && pnpm install && pnpm typecheck
 ## Development
 
 ```bash
-# mycord-discord-mcp
-cd mycord-discord-mcp
-make setup && make lint && make typecheck && make test
-
 # mycord-discord-skill
 cd mycord-discord-skill
 make setup && make lint && make test
@@ -207,10 +175,10 @@ cd gvoice
 pnpm install && pnpm typecheck
 ```
 
-`mycord-discord-skill` must never gain a `fastmcp` dependency; `mycord-discord-mcp` must never
-be imported from it. That separation is the point of the split. `gvoice/` must
-never gain a dependency on any of the Python components — it is independent on
-the same terms, and a shared dependency would end that.
+`mycord-discord-skill/` is the supported Discord path: no protocol layer sits in
+front of it, and none should. `gvoice/` must never gain a dependency on any of
+the Python components — it is independent on the same terms, and a shared
+dependency would end that.
 
 ## Security
 

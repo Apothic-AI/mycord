@@ -12,11 +12,11 @@ instead of writing one giant script.
 
 > **No selfbot warning here.** Telegram publishes MTProto for third-party
 > clients and every official client uses it, so driving a user account is
-> supported. Contrast the Discord components in this repo, which do carry
+> supported. Contrast `mycord-discord-skill/` in this repo, which does carry
 > real ban risk.
 
-This component shares no code with `mycord-discord-skill/` or
-`mycord-discord-mcp/` — only the persistent-REPL shape.
+This component shares no code with `mycord-discord-skill/` — only the
+persistent-REPL shape.
 
 ---
 
@@ -334,13 +334,13 @@ cp .env.example .env      # fill in TELEGRAM_API_ID / TELEGRAM_API_HASH
 | `SessionPasswordNeededError` | 2FA — set `TELEGRAM_2FA_PASSWORD` |
 | session hangs | a snippet is blocked; default eval timeout is 30s, raise with `--timeout` |
 
-## Relationship to the Discord components
+## Relationship to `mycord-discord-skill/`
 
-Independent. `mycord-discord-skill/` and `mycord-discord-mcp/` drive Discord
-via `discord.py-self`; this drives Telegram via `telethon`. They share the
-repo and the REPL architecture, and **nothing else** — different platform,
-different library, different credentials, separate sockets. Do not import
-across them, and never start one expecting the other's daemon.
+Independent. `mycord-discord-skill/` drives Discord via `discord.py-self`; this
+drives Telegram via `telethon`. They share the repo and the REPL architecture,
+and **nothing else** — different platform, different library, different
+credentials, separate sockets. Do not import across them, and never start one
+expecting the other's daemon.
 
 ## Two Telegram-specific constraints
 

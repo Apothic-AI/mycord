@@ -8,8 +8,9 @@ previous one.
 > violates Discord's Terms of Service and can get the account permanently
 > banned. Use a throwaway personal account only.
 
-This package depends **only** on `discord.py-self` and `python-dotenv`. It does
-not depend on the `mycord-discord-mcp/` FastMCP server in any way.
+This package depends **only** on `discord.py-self` and `python-dotenv`. It is
+the supported Discord path in this repo: drive the library directly, with no
+protocol layer in front of it.
 
 ## Install
 

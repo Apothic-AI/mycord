@@ -24,9 +24,8 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 
-# Deliberately minimal: this component must NOT depend on the Discord
-# components, nor on the mycord-discord-mcp/ server. Agents drive Telegram
-# through Telethon directly.
+# Deliberately minimal: this component must NOT depend on mycord-discord-skill/.
+# Agents drive Telegram through Telethon directly.
 dependencies = [
     "telethon>=1.45.0",
     "python-dotenv>=1.2.4",

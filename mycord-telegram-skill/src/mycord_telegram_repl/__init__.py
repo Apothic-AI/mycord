@@ -1,8 +1,7 @@
 """Persistent REPL-style Telegram automation for agents.
 
 This package deliberately depends only on ``telethon``. It does not depend on
-the Discord components (``mycord-discord-skill/``,
-``mycord-discord-mcp/``) in any way, and it never authenticates with a bot
+``mycord-discord-skill/`` in any way, and it never authenticates with a bot
 token - see :mod:`mycord_telegram_repl.auth` for the three supported user
 login methods.
 """

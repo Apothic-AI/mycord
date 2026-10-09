@@ -1,6 +1,6 @@
 ---
 name: mycord-discord-skill
-description: Drive a real Discord user account from Python using discord.py-self through a persistent REPL-style session (mycord-repl). Use when asked to read, send, edit, react to, search, or monitor Discord messages, channels, guilds, DMs, or members - as a library, not an MCP server. Relies on selfbot automation, which violates Discord's ToS and can get an account banned.
+description: Drive a real Discord user account from Python using discord.py-self through a persistent REPL-style session (mycord-repl). Use when asked to read, send, edit, react to, search, or monitor Discord messages, channels, guilds, DMs, or members - as a library. Relies on selfbot automation, which violates Discord's ToS and can get an account banned.
 ---
 
 # mycord — Discord as a Python library
@@ -14,9 +14,6 @@ instead of writing one giant script.
 > Discord's Terms of Service and **can get the account permanently banned**.
 > Only use it on a personal account you are willing to lose. Never point it at
 > a shared, work, or customer-facing account.
-
-This skill is **independent of the MCP server** in `mycord-discord-mcp/`. If you were
-handed this skill, you do not need to start, install, or talk to any MCP server.
 
 For **large** channel or DM histories destined for disk, do not page through
 `history()` by hand — use the optional
@@ -307,10 +304,3 @@ human is going to read it.
 | `AttributeError` on a channel method | you may be holding a `ForumChannel`/partial; re-fetch with `get_channel` |
 | session hangs | a snippet is blocked; the default eval timeout is 30s, raise with `--timeout` |
 | `timed out` | the awaited call outran its budget; split it or raise `--timeout` |
-
-## Relationship to `mycord-discord-mcp/`
-
-Independent. `mycord-discord-mcp/` exposes a FastMCP server for MCP clients;
-`mycord-discord-skill/` is this Python-library REPL. They share the upstream repo and
-the `discord.py-self` dependency, but neither imports the other. Use whichever
-fits the caller — and never start the MCP server just to use this skill.

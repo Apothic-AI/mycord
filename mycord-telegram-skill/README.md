@@ -6,11 +6,10 @@ previous one.
 
 > **No selfbot warning.** Telegram publishes MTProto for third-party clients
 > and every official client uses it, so automating a user account here is
-> supported. The Discord components in this repo do not have that property.
+> supported. The Discord component in this repo does not have that property.
 
 This package depends **only** on `telethon` and `python-dotenv`. It shares no
-code with `mycord-discord-skill/` or `mycord-discord-mcp/`, and never
-authenticates with a bot token.
+code with `mycord-discord-skill/`, and never authenticates with a bot token.
 
 ## Install
 

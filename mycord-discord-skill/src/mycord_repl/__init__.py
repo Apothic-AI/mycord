@@ -1,7 +1,7 @@
 """Persistent REPL-style Discord automation for agents.
 
-This package deliberately depends only on ``discord.py-self``. It does not
-depend on the mycord MCP server (``mycord-discord-mcp/``) in any way.
+This package deliberately depends only on ``discord.py-self``. It is the
+supported Discord path in this repo: drive it directly, with nothing in front.
 """
 
 from mycord_repl.client import SessionClient, SessionNotRunning
