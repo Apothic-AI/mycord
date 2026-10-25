@@ -14,7 +14,8 @@ package. Where something could not be verified, it says so.
 
 | Platform | Library | Fits "REPL, no bot" | Send | Read | Verified here |
 | --- | --- | --- | --- | --- | --- |
-| WhatsApp | **neonize** (Python ↔ whatsmeow) | yes — QR/phone-code device pair | yes | live events + limited history | installed 0.5.2, 103-method API |
+| WhatsApp | **neonize** (Python ↔ whatsmeow) | yes — QR/phone-code device pair | yes | live events, **no on-demand history** | installed 0.5.2, 103-method API |
+| WhatsApp (alt) | `whatsapp-web.js` / wppconnect | yes — headless browser | yes | **yes, incl. history** | 12.5 s headless boot, QR rendered |
 | Slack | **slackdump** (+ `slack_sdk` for posting) | yes — `xoxc` + `d` cookie | read: yes, post: via `slack_sdk` | yes | built v3, ran, login docs confirmed |
 | Signal | **signal-cli** (skill already installed) | yes — linked device | yes | yes | skill present; binary 0.14.6, account dead |
 
@@ -53,10 +54,12 @@ core over FFI, so there is no Node subprocess and no browser.
 empty). whatsmeow delivers history through `HistorySyncEv` on a fresh link, then through
 live `MessageEv`s. So a WhatsApp REPL differs from the Telegram one in an important way:
 
-> **History must be accumulated locally as messages arrive** (the library already gives
-> us that for free, since every `MessageEv` can be appended to the same SQLite file the
-> session lives in). A REPL cannot reasonably answer "show me the last 50 messages in
-> this chat" unless it has been running and recording.
+> **History must be accumulated locally as messages arrive.** A REPL cannot answer "show
+> me the last 50 messages in this chat" unless it has been running and recording.
+
+**This is the single strongest argument for the headless-browser alternative** — see the
+next section. In WhatsApp Web, history already exists in the browser's local store, and
+`getMessages({count, direction})` / `searchMessages` read it directly.
 
 Pairing is a real UX decision, not a detail: `PairPhone` (enter a code on the phone) is
 usable headlessly, while QR needs a rendered image. For a REPL, phone-code pairing is the
@@ -113,6 +116,74 @@ not remove category 2.
 
 No voice/video call support. Requires a phone number already on WhatsApp as the primary
 device.
+
+## WhatsApp alternative: headless browser (whatsapp-web.js)
+
+Strictly speaking the yes/no answer to "is there a selfbot-like headless-browser project"
+is **yes, several**, and they work here. But they are not a straight upgrade, so the
+comparison matters more than the existence proof.
+
+| Project | Latest | Published | Engine | History read |
+| --- | --- | --- | --- | --- |
+| `whatsapp-web.js` | 1.34.7 | 2026-04-24 | Puppeteer | `getMessages`, `searchMessages`, `syncHistory`, `getChats` |
+| `@wppconnect-team/wppconnect` | 2.3.6 | 2026-10-23 | Puppeteer | full `wa-js` `getMessages` (count/direction/onlyUnread/media) |
+| `neonize` (whatsmeow) | 0.5.2 | 2026-09-21 | native protocol | events only, no on-demand fetch |
+
+**Verified on this host:** `whatsapp-web.js` installed (193 packages, 83 MB) and
+initialized against the existing `/usr/bin/google-chrome` in **12.5 s**, rendering a real
+WhatsApp Web QR — no account linked, no QR scanned. So the mechanism is sound and working.
+
+**Why I still recommend neonize, despite the history advantage:**
+
+1. **No protection from the ban category that matters.** Both sit in "unofficial client",
+   which is the enforcement reason that does not depend on behaviour. A browser is *not*
+   an official client; it is a browser pretending to be one. So this choice does not buy
+   safety, only history convenience.
+2. **It is the same category as `mycord-discord-skill`'s selfbot**, whereas the native
+   protocol path at least does not require driving a browser.
+3. **It is heavier operationally**: a Chromium per session, 626 MB of Puppeteer browser
+   cache already on disk, ~83 MB of node_modules, and a second runtime (Node) in a
+   Python-first repo. Puppeteer's downloaded Chromium can be avoided by pointing
+   `executablePath` at system Chrome, which is what the probe did.
+4. **WhatsApp Web is a moving target for a *page*.** Selector and bundle churn breaks these
+   libraries more often than protocol churn breaks whatsmeow.
+
+**But the history point is legitimate and might outweigh the rest.** If reading existing
+conversations on demand is a core requirement rather than a nice-to-have, the browser path
+is the only one that provides it without a recording daemon. The honest decision rule:
+
+* **Need to read old history on demand** → `whatsapp-web.js` (or wppconnect, which is more
+  actively published and exposes richer history APIs). Accept the browser footprint.
+* **Need to send/reply and follow new messages** → `neonize`, record as you go.
+
+A hybrid is also reasonable and cheap: neonize for the connection, and treat history as
+"whatever we have seen since linking", stated plainly in the skill.
+
+## Slack: what you need to do (current state of this machine)
+
+**No Slack app, and no Slack app install.** That path is excluded by the requirement
+anyway.
+
+**Signing into Slack in Chrome is necessary and sufficient**, but it has *not* been done
+on this machine yet. Checked the live Chrome profile's cookie DB: `slack.com` and
+`.slack.com` are present, but only anonymous/marketing cookies
+(`_ga`, `_cs_c`, `OptanonConsent`, `utm`, `browser-notification-shown`…). The one that
+matters — **`d` on `.slack.com`** (the `xoxd` session cookie) — **is absent**, which means
+no workspace is signed in.
+
+So the single prerequisite is: **sign in to at least one workspace at slack.com in the
+Chrome profile this machine uses** (`~/.config/google-chrome/Default`), then a capture step
+pulls `xoxc` + `d` out. That capture is the same CDP mechanism already built and proven
+for `google-voice-skill`, so it is a solved problem — no new browser machinery.
+
+```bash
+# after signing in, the capture should find a `d` cookie on .slack.com
+sqlite3 ~/.config/google-chrome/Default/Cookies \
+  "select name from cookies where name='d' and host_key like '%slack%';"
+```
+
+Local Slack state: **none** (`~/.cache/slackdump` absent, no Slack tokens in the
+environment). So both `slackdump` and `slack_sdk` are installed/ready but unauthenticated.
 
 ## Slack: slackdump for reading, slack_sdk for posting
 
