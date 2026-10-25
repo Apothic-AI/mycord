@@ -1,0 +1,37 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mycord-ferdium"
+version = "0.1.0"
+description = "Drive a Ferdium install over CDP: headless launch, webview discovery, page primitives"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "ISC" }
+dependencies = []
+
+[project.scripts]
+mycord-ferdium = "mycord_ferdium.cli:main"
+
+[dependency-groups]
+dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mycord_ferdium"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: needs a running Ferdium with a debug port; skipped by default"]

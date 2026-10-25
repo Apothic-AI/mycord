@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+*.egg-info/
+
+# Never commit a captured session. `mycord-slack login` writes the env file here, and
+# the session file holds an xoxc token plus the httpOnly `d` cookie value — together,
+# the whole account.
+session.json*
+slack.env*
+.env

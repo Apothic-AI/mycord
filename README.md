@@ -26,6 +26,8 @@ Google Voice on [`werift`][werift].
 | [`mycord-irc-skill/`](mycord-irc-skill/) | Agent skill: IRC as a Python library via a persistent REPL | no |
 | [`mycord-email-skill/`](mycord-email-skill/) | Agent skill: email from any provider through the `himalaya` CLI | no |
 | [`google-voice-skill/`](google-voice-skill/) | Agent skill: Google Voice reading and calls over the `gvoice` library | no |
+| [`ferdium-skill/`](ferdium-skill/) | Agent skill: drive a Ferdium install over CDP (headless by default) | no |
+| [`mycord-slack-skill/`](mycord-slack-skill/) | Agent skill: Slack with no app registration, full same-as-you access | no |
 | [`gvoice/`](gvoice/) | Unofficial Google Voice client in TypeScript: SMS over HTTP, calls over SIP-on-WebSocket | no |
 
 Every component stands alone. Telegram and IRC are separate platforms and
@@ -158,6 +160,10 @@ traps that cost real debugging time in [`gvoice/README.md`](gvoice/README.md).
   `google-voice-skill/`, which wraps `gvoice/` and carries the unofficial-client
   caveat instead of the selfbot one.
 * You want the **raw Google Voice protocol** to build on — `gvoice/` itself.
+* You want **Slack**, with the same access you have in the browser — `mycord-slack-skill/`.
+* You want to drive **any service already configured in Ferdium** (WhatsApp, and any
+  other chat medium) without a bot registration — `ferdium-skill/` is the base; a
+  medium-specific skill layers the selectors on top.
 
 ## Layout
 
@@ -173,6 +179,14 @@ mycord/
 │   └── SKILL.md
 ├── mycord-irc-skill/             # IRC agent skill
 │   ├── src/mycord_irc_repl/      # session daemon + CLI
+│   ├── tests/
+│   └── SKILL.md
+├── ferdium-skill/                # CDP driver for a Ferdium install
+│   ├── src/mycord_ferdium/ # launch, webview discovery, page primitives
+│   ├── tests/
+│   └── SKILL.md
+├── mycord-slack-skill/           # Slack: slackdump reads + slack_sdk passthrough
+│   ├── src/mycord_slack/ # session capture, api passthrough, read verbs
 │   ├── tests/
 │   └── SKILL.md
 ├── google-voice-skill/           # Google Voice agent skill over gvoice/
@@ -196,6 +210,8 @@ cd mycord-telegram-skill  && uv sync --all-extras && uv run pytest
 cd mycord-irc-skill       && uv sync --all-extras && uv run pytest
 cd mycord-email-skill     && uv sync --all-extras && uv run pytest
 cd google-voice-skill     && uv sync --all-extras && uv run pytest -m "not live"
+cd ferdium-skill          && uv sync --all-extras && uv run pytest -m "not live"
+cd mycord-slack-skill     && uv sync --all-extras && uv run pytest -m "not live"
 cd gvoice                 && pnpm install && pnpm typecheck
 ```
 
@@ -216,6 +232,14 @@ make setup && make lint && make typecheck && make test
 
 # google-voice-skill
 cd google-voice-skill
+make setup && make lint && make typecheck && make test
+
+# ferdium-skill
+cd ferdium-skill
+make setup && make lint && make typecheck && make test
+
+# mycord-slack-skill
+cd mycord-slack-skill
 make setup && make lint && make typecheck && make test
 
 # gvoice
@@ -252,6 +276,11 @@ nothing about it.
   0600, values never logged. Treat it like a password: it authenticates the
   whole account, it expires, and it must be re-exported from a signed-in
   browser.
+
+## Roadmap
+
+Committed future work — including voice (ASR + TTS) for WhatsApp and Slack calls — is
+tracked in [`docs/roadmap.md`](docs/roadmap.md). Nothing there is in progress.
 
 ## Archived research
 
