@@ -1,9 +1,9 @@
 # mycord
 
-Chat-platform automation, split into **independent** components: one for
-Discord on [`discord.py-self`][dps], one for Telegram on
-[`telethon`][telethon], one for IRC on [`pydle`][pydle], and one for Google
-Voice on [`werift`][werift].
+Messaging automation, split into **independent** components: one for Discord
+on [`discord.py-self`][dps], one for Telegram on [`telethon`][telethon], one for
+IRC on [`pydle`][pydle], one for email on [`himalaya`][himalaya], and one for
+Google Voice on [`werift`][werift].
 
 > **The Discord component is a selfbot.** It logs in as a Discord *user*,
 > not a bot. That violates Discord's Terms of Service and **can get the account
@@ -24,6 +24,7 @@ Voice on [`werift`][werift].
 | [`mycord-discord-skill/`](mycord-discord-skill/) | Agent skill: Discord as a Python library via a persistent REPL | no |
 | [`mycord-telegram-skill/`](mycord-telegram-skill/) | Agent skill: Telegram as a Python library via a persistent REPL | no |
 | [`mycord-irc-skill/`](mycord-irc-skill/) | Agent skill: IRC as a Python library via a persistent REPL | no |
+| [`mycord-email-skill/`](mycord-email-skill/) | Agent skill: email from any provider through the `himalaya` CLI | no |
 | [`gvoice/`](gvoice/) | Unofficial Google Voice client in TypeScript: SMS over HTTP, calls over SIP-on-WebSocket | no |
 
 Every component stands alone. Telegram and IRC are separate platforms and
@@ -84,6 +85,35 @@ uv run mycord-irc-repl stop
 Instructions for agents live in
 [`mycord-irc-skill/SKILL.md`](mycord-irc-skill/SKILL.md).
 
+### `mycord-email-skill/` — email agent skill
+
+For agents and operators. Wraps the [`himalaya`][himalaya] CLI in an account
+layer, because himalaya deliberately keeps configuration and credentials out of
+the binary — which is correct, and leaves every new mailbox as a hand-edited
+config plus another set of invented environment variables.
+
+Himalaya does all the mail work: IMAP, SMTP, JMAP, Microsoft Graph, Gmail,
+Maildir, MIME, TLS, and one shared query DSL. The wrapper answers *which
+account*, *where its secret lives*, and *how to connect*, then passes your
+arguments through verbatim — so `mycord-email envelope search subject foo` is
+just himalaya, with an account applied.
+
+Accounts are directories with a deliberate file split: `meta.toml` (0644,
+non-secret, safe to print) and `credentials.env` (0600, read per call and passed
+to himalaya only through that child process's environment). Providers are a data
+table, not code — plain IMAP/SMTP, Gmail, Microsoft 365, and optionally Proton
+Mail Bridge with its self-signed certificate pinned.
+
+```bash
+uv tool install mycord-email-skill     # puts `mycord-email` on PATH
+mycord-email accounts add work you@example.com --provider imap
+mycord-email accounts set-secret work
+mycord-email envelope list --page-size 10
+```
+
+Instructions for agents live in
+[`mycord-email-skill/SKILL.md`](mycord-email-skill/SKILL.md).
+
 ### `gvoice/` — Google Voice client
 
 The odd one out, and independent on the same terms: TypeScript, its own `pnpm`
@@ -122,6 +152,7 @@ traps that cost real debugging time in [`gvoice/README.md`](gvoice/README.md).
   `mycord-telegram-skill/`.
 * You want **IRC**, with a live asynchronous client and no protocol layer —
   `mycord-irc-skill/`.
+* You want **email**, from an inbox to a verification code — `mycord-email-skill/`.
 * You want **real voice calls or SMS without a browser** — `gvoice/`, which
   carries the unofficial-client caveat instead of the selfbot one.
 
@@ -156,6 +187,7 @@ The three Python components are standalone projects with their own
 cd mycord-discord-skill   && uv sync --all-extras && uv run pytest
 cd mycord-telegram-skill  && uv sync --all-extras && uv run pytest
 cd mycord-irc-skill       && uv sync --all-extras && uv run pytest
+cd mycord-email-skill     && uv sync --all-extras && uv run pytest
 cd gvoice                 && pnpm install && pnpm typecheck
 ```
 
@@ -168,6 +200,10 @@ make setup && make lint && make test
 
 # mycord-irc-skill
 cd mycord-irc-skill
+make setup && make lint && make typecheck && make test
+
+# mycord-email-skill
+cd mycord-email-skill
 make setup && make lint && make typecheck && make test
 
 # gvoice
@@ -191,6 +227,11 @@ dependency would end that.
 * IRC credentials are sent only over TLS; the IRC REPL refuses password-based
   authentication when TLS is disabled. The IRC REPL also executes arbitrary
   Python at the same trust level as your shell.
+* `mycord-email-skill` keeps credentials in a per-account
+  `credentials.env` (mode 0600) that is read per call and passed to himalaya
+  only through that child process's environment. It is never rendered into
+  generated config and never exported into your shell. A credential file that is
+  group- or world-readable is a hard error, not a warning.
 * `gvoice` holds your Google cookie jar in `gv-session.json` — gitignored, mode
   0600, values never logged. Treat it like a password: it authenticates the
   whole account, it expires, and it must be re-exported from a signed-in
@@ -209,4 +250,5 @@ MIT.
 [dps]: https://github.com/dolfies/discord.py-self
 [telethon]: https://github.com/Lonami/Telethon
 [pydle]: https://codeberg.org/shiz/pydle
+[himalaya]: https://github.com/pimalaya/himalaya
 [werift]: https://github.com/shinyoshiaki/werift-webrtc

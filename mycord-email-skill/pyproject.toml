@@ -1,0 +1,99 @@
+[build-system]
+requires = ["setuptools>=84.0.0", "wheel>=0.48.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mycord-email"
+version = "0.1.0"
+description = "Account-optional wrapper around the Himalaya mail CLI, for agent-driven email"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    {name = "Apothic Team"}
+]
+license = {text = "MIT"}
+keywords = ["email", "imap", "smtp", "himalaya", "repl", "agent", "automation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+# Deliberately dependency-free at runtime. Email parsing, TLS, IMAP, SMTP, and
+# the query DSL all belong to himalaya; this package only assembles config and
+# resolves credentials, which the standard library already does.
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.10",
+    "mypy>=2.4.0",
+]
+
+[project.scripts]
+mycord-email = "mycord_email.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["mycord_email*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = [
+    "-v",
+    "--strict-markers",
+]
+markers = [
+    "unit: Unit tests for pure functions and contracts",
+    "live: Tests that contact a real mail account (skipped unless MYCORD_EMAIL_LIVE=1)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "ANN", # flake8-annotations
+    "S",   # flake8-bandit
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "DTZ", # flake8-datetimez
+    "EM",  # flake8-errmsg
+    "G",   # flake8-logging-format
+    "PIE", # flake8-pie
+    "T20", # flake8-print
+    "PT",  # flake8-pytest-style
+    "RUF", # ruff-specific rules
+]
+ignore = [
+    "S101",  # Use of assert (OK in tests)
+    "N818",  # AccountError reads better than AccountErrorError
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "ANN", "PLR2004", "S105", "S106", "S108"]
+"src/mycord_email/cli.py" = ["T201"] # a CLI is supposed to print
+"src/mycord_email/run.py" = ["T201"] # binary-not-found message is a CLI concern
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+warn_unused_ignores = true
+
+[tool.coverage.run]
+source = ["mycord_email"]
