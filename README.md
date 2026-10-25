@@ -26,6 +26,7 @@ Google Voice on [`werift`][werift].
 | [`mycord-irc-skill/`](mycord-irc-skill/) | Agent skill: IRC as a Python library via a persistent REPL | no |
 | [`mycord-email-skill/`](mycord-email-skill/) | Agent skill: email from any provider through the `himalaya` CLI | no |
 | [`google-voice-skill/`](google-voice-skill/) | Agent skill: Google Voice reading and calls over the `gvoice` library | no |
+| [`mycord-skill/`](mycord-skill/) | **Start here** — routing skill: which medium, which component to install, whether voice works | no |
 | [`ferdium-skill/`](ferdium-skill/) | Agent skill: drive a Ferdium install over CDP (headless by default) | no |
 | [`mycord-slack-skill/`](mycord-slack-skill/) | Agent skill: Slack with no app registration, full same-as-you access | no |
 | [`gvoice/`](gvoice/) | Unofficial Google Voice client in TypeScript: SMS over HTTP, calls over SIP-on-WebSocket | no |
@@ -161,6 +162,8 @@ traps that cost real debugging time in [`gvoice/README.md`](gvoice/README.md).
   caveat instead of the selfbot one.
 * You want the **raw Google Voice protocol** to build on — `gvoice/` itself.
 * You want **Slack**, with the same access you have in the browser — `mycord-slack-skill/`.
+* You do not yet know **which medium or component** you need — start at
+  `mycord-skill/`, which routes to all of them and says what is shipped vs. planned.
 * You want to drive **any service already configured in Ferdium** (WhatsApp, and any
   other chat medium) without a bot registration — `ferdium-skill/` is the base; a
   medium-specific skill layers the selectors on top.
@@ -181,6 +184,7 @@ mycord/
 │   ├── src/mycord_irc_repl/      # session daemon + CLI
 │   ├── tests/
 │   └── SKILL.md
+├── mycord-skill/                 # routing skill: pick a medium + install it
 ├── ferdium-skill/                # CDP driver for a Ferdium install
 │   ├── src/mycord_ferdium/ # launch, webview discovery, page primitives
 │   ├── tests/
@@ -276,6 +280,13 @@ nothing about it.
   0600, values never logged. Treat it like a password: it authenticates the
   whole account, it expires, and it must be re-exported from a signed-in
   browser.
+
+## Library determinations
+
+`docs/determine/` holds a per-medium determination — the optimal no-app-registration
+path, the ranked alternatives, and a voice verdict — for Signal, X, Facebook Messenger,
+Microsoft Teams, Zoom, Skype and WeChat. Signal's voice path is proven on this host;
+Skype is retired upstream and gets no skill.
 
 ## Roadmap
 

@@ -2,6 +2,11 @@
 
 **Updated:** 2026-10-25
 
+> Library determinations for eight further mediums are in
+> [`docs/determine/`](determine/). They answer *what to build and whether voice is
+> possible*; none has code yet. This file tracks committed work, and the two voice items
+> below remain the reason it exists.
+
 Committed future work for components that exist today. Each item is a real feature with
 a design already proven somewhere in this repo — the point of listing it is that the
 approach is known and only the work remains.
@@ -50,6 +55,39 @@ two Slack-specific wrinkles:
   client — a capability question worth answering before any implementation.
 
 ---
+
+---
+
+## Mediums with a determination, no code yet
+
+Each has a completed determination stating the optimal no-app-registration path and a
+voice verdict. Signal is the strongest: its voice path is **already proven on this host**.
+
+| Medium | Chosen path | Voice |
+| --- | --- | --- |
+| Signal | `signal-cli` JSON-RPC daemon + `signal-call-tunnel` PCM socket | **possible, proven** |
+| X / Twitter | *determination in progress* | — |
+| Facebook Messenger | see [determination](determine/messenger.md) | **possible** — ordinary WebRTC in the page |
+| Microsoft Teams | see [determination](determine/teams.md) | OS audio + CDP page; no API route |
+| Zoom | *determination in progress* (virtual-device audio under study) | — |
+| WeChat / WeCom | WeCom server API (not the personal account) | **impossible** (policy-bound) |
+| Skype | **no skill planned** — consumer Skype retired 2025-05-05 | n/a |
+
+### Voice transport shapes
+
+Two shapes are proven on this machine, and the determinations surfaced a third that
+would generalize across every conferencing medium:
+
+| Shape | Precedent | Reaches |
+| --- | --- | --- |
+| WebRTC peer in the process | `gvoice/` over `werift` | Google Voice |
+| Unix PCM socket | `signal-call-tunnel` (`AUDIO_MODE=pipe`) | Signal |
+| OS virtual audio device (PulseAudio/PipeWire) | *proposed* | any desktop/web client that lets you pick a device — Zoom, Teams |
+
+The third is the one worth building toward: a virtual device is client-agnostic, so one
+implementation would serve every medium that cannot expose call audio in-process. It is
+also the only shape available where the vendor ships a native client and refuses third
+party media (Teams).
 
 ## Sequencing note
 
