@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+*.egg-info/
+
+# Never commit a captured session or a replayed SMS payload.
+gv-session.json
+sendsms-capture.json
+.env

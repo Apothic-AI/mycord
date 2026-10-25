@@ -41,6 +41,10 @@ ENV/
 # Transient agent working notes
 .agent-context/
 
+# Google Voice session jar (also ignored inside gvoice/, where it is written)
+gv-session.json
+sendsms-capture.json
+
 # Editors
 .vscode/
 .idea/

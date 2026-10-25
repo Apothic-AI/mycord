@@ -1,0 +1,41 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "google-voice-skill"
+version = "0.1.0"
+description = "Agent skill and CLI over the unofficial gvoice Google Voice library"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "ISC" }
+dependencies = []
+
+[project.scripts]
+gvoice-skill = "gvoice_skill.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+    "mypy>=1.11",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/gvoice_skill"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: hits the live Google Voice account; skipped by default"]

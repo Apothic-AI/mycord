@@ -25,6 +25,7 @@ Google Voice on [`werift`][werift].
 | [`mycord-telegram-skill/`](mycord-telegram-skill/) | Agent skill: Telegram as a Python library via a persistent REPL | no |
 | [`mycord-irc-skill/`](mycord-irc-skill/) | Agent skill: IRC as a Python library via a persistent REPL | no |
 | [`mycord-email-skill/`](mycord-email-skill/) | Agent skill: email from any provider through the `himalaya` CLI | no |
+| [`google-voice-skill/`](google-voice-skill/) | Agent skill: Google Voice reading and calls over the `gvoice` library | no |
 | [`gvoice/`](gvoice/) | Unofficial Google Voice client in TypeScript: SMS over HTTP, calls over SIP-on-WebSocket | no |
 
 Every component stands alone. Telegram and IRC are separate platforms and
@@ -153,8 +154,10 @@ traps that cost real debugging time in [`gvoice/README.md`](gvoice/README.md).
 * You want **IRC**, with a live asynchronous client and no protocol layer —
   `mycord-irc-skill/`.
 * You want **email**, from an inbox to a verification code — `mycord-email-skill/`.
-* You want **real voice calls or SMS without a browser** — `gvoice/`, which
-  carries the unofficial-client caveat instead of the selfbot one.
+* You want **Google Voice texts, or a real phone call, from an agent** —
+  `google-voice-skill/`, which wraps `gvoice/` and carries the unofficial-client
+  caveat instead of the selfbot one.
+* You want the **raw Google Voice protocol** to build on — `gvoice/` itself.
 
 ## Layout
 
@@ -170,6 +173,10 @@ mycord/
 │   └── SKILL.md
 ├── mycord-irc-skill/             # IRC agent skill
 │   ├── src/mycord_irc_repl/      # session daemon + CLI
+│   ├── tests/
+│   └── SKILL.md
+├── google-voice-skill/           # Google Voice agent skill over gvoice/
+│   ├── src/gvoice_skill/ # session capture, proto decoding, CLI
 │   ├── tests/
 │   └── SKILL.md
 ├── gvoice/                       # Google Voice client (TypeScript)
@@ -188,6 +195,7 @@ cd mycord-discord-skill   && uv sync --all-extras && uv run pytest
 cd mycord-telegram-skill  && uv sync --all-extras && uv run pytest
 cd mycord-irc-skill       && uv sync --all-extras && uv run pytest
 cd mycord-email-skill     && uv sync --all-extras && uv run pytest
+cd google-voice-skill     && uv sync --all-extras && uv run pytest -m "not live"
 cd gvoice                 && pnpm install && pnpm typecheck
 ```
 
@@ -206,6 +214,10 @@ make setup && make lint && make typecheck && make test
 cd mycord-email-skill
 make setup && make lint && make typecheck && make test
 
+# google-voice-skill
+cd google-voice-skill
+make setup && make lint && make typecheck && make test
+
 # gvoice
 cd gvoice
 pnpm install && pnpm typecheck
@@ -214,7 +226,9 @@ pnpm install && pnpm typecheck
 `mycord-discord-skill/` is the supported Discord path: no protocol layer sits in
 front of it, and none should. `gvoice/` must never gain a dependency on any of
 the Python components — it is independent on the same terms, and a shared
-dependency would end that.
+dependency would end that. The dependency runs one way only:
+`google-voice-skill/` calls into `gvoice/` through Node, and `gvoice/` knows
+nothing about it.
 
 ## Security
 
@@ -232,6 +246,8 @@ dependency would end that.
   only through that child process's environment. It is never rendered into
   generated config and never exported into your shell. A credential file that is
   group- or world-readable is a hard error, not a warning.
+* `google-voice-skill` prints cookie *names* and host counts, never values, and
+  its capture path copies the browser profile rather than writing to it.
 * `gvoice` holds your Google cookie jar in `gv-session.json` — gitignored, mode
   0600, values never logged. Treat it like a password: it authenticates the
   whole account, it expires, and it must be re-exported from a signed-in
