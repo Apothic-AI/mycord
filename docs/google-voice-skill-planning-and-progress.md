@@ -80,8 +80,30 @@ thread id is `group[6]`.
 | `thread/search` | filters (nonsense query → 0 results), thread id from `group[6]` |
 | SIP REGISTER | `200 OK` from a plain Node client |
 
-58 tests pass, 9 of them against the live account (`-m live`). `ruff` and `mypy
---strict` are clean.
+52 tests pass offline; 8 live tests pass against a valid session and skip with a clear
+reason when the jar is dead. `ruff` and `mypy --strict` are clean.
+
+## Session handling: what the ignore rules cover
+
+The jar is a full-account credential, so it is ignored in three places (repo root,
+`gvoice/`, and the skill dir) with a trailing `*`: `gv-session.json*`. The wildcard is
+load-bearing — the writer stages at `<name>.tmp` before the atomic rename, and that file
+briefly contains the same secrets. Without it, the staging file was a commit risk.
+`_write_session()` creates the staging file 0600 *before* writing to it, so the values
+are never briefly world-readable, and a failed write leaves nothing behind. Both
+properties are pinned by tests.
+
+A jar can be present and dead: cookies expire, and Chrome rotates `__Secure-1PSIDTS`
+behind an otherwise-valid `SAPISID`. The live tests probe `account/get` once and skip the
+module with the 401 in the message, rather than reporting eight identical failures as if
+the code regressed.
+
+**Operational hazard, observed:** a headless Chrome launched against the real
+`~/.config/google-chrome/Default` (rather than a copy) signed the profile out — a valid
+`SAPISID` disappeared and the Voice page began redirecting to a marketing page. That was
+a diagnostic run, not part of the skill, but it is now documented in both `SKILL.md` and
+`README.md` so nobody repeats it while debugging. `login` copies the profile for this
+reason.
 
 ## Remaining work (library, not skill)
 

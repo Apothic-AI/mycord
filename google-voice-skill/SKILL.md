@@ -33,6 +33,17 @@ starts a copy of that profile, reads the cookie jar over the Chrome DevTools Pro
 and writes `gvoice/gv-session.json` at mode 0600. It prints cookie *names* and host
 counts, never values.
 
+> **Never point a browser at the real profile directory.** Launching Chrome against
+> `~/.config/google-chrome/Default` to inspect cookies can invalidate the session you
+> were trying to read — observed: a profile went from signed-in to no `SAPISID` at all
+> after a headless launch on that directory, which signed the human out. `login` copies
+> the profile to a scratch dir for exactly this reason; keep it that way.
+
+A jar can also be present and dead. Cookies expire, and Chrome rotates
+`__Secure-1PSIDTS` behind an otherwise-valid `SAPISID`, so a jar that worked yesterday
+can return `401 SESSION_COOKIE_INVALID` today. `gvoice-skill login` is the fix; the live
+tests skip with that message rather than failing.
+
 Everything else fails with a clear message if the session is missing or
 group/world-readable; the file authenticates the entire Google account, so 0600 is a
 hard requirement, not advice.

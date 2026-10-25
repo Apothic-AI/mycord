@@ -41,9 +41,10 @@ ENV/
 # Transient agent working notes
 .agent-context/
 
-# Google Voice session jar (also ignored inside gvoice/, where it is written)
-gv-session.json
-sendsms-capture.json
+# Google Voice session jar: a full-account credential. The trailing * also covers the
+# `<path>.tmp` staging file the writer creates before the atomic rename.
+gv-session.json*
+sendsms-capture.json*
 
 # Editors
 .vscode/

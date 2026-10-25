@@ -182,7 +182,13 @@ def test_threads_wires_the_warmsync_token_not_the_page_size(
     assert calls == [("inbox/warmsync", []), ("api2thread/list", [2, 7])]
 
 
-def test_api_rejects_a_non_array_body(capsys: pytest.CaptureFixture[str]) -> None:
+def test_api_rejects_a_non_array_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Validated before the session is touched, so it holds with or without a jar."""
+    lib = _fake_library(tmp_path / "gvoice")
+    _session_file(lib / "gv-session.json")
+    monkeypatch.setenv("GVOICE_ROOT", str(lib))
     args = cli.build_parser().parse_args(["api", "account/get", '{"not":"positional"}'])
     assert cli.cmd_api(args) == cli.EXIT_USAGE
     assert "positional protojson" in capsys.readouterr().err
@@ -200,6 +206,38 @@ def test_session_written_0600_regardless_of_umask(tmp_path: Path) -> None:
     cli._write_session({"cookies": [], "sapisid": "x"}, target)
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
     assert json.loads(target.read_text())["sapisid"] == "x"
+
+
+def test_session_staging_file_name_stays_under_the_ignore_rule(tmp_path: Path) -> None:
+    """The atomic write stages at `<name>.tmp`, which must not be a new commit risk."""
+    target = tmp_path / "gv-session.json"
+    staging: list[str] = []
+    real_replace = os.replace
+
+    def spy(src, dst):  # type: ignore[no-untyped-def]
+        staging.append(Path(src).name)
+        return real_replace(src, dst)
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(os, "replace", spy)
+        cli._write_session({"cookies": [], "sapisid": "x"}, target)
+    assert staging == ["gv-session.json.tmp"]
+    assert not list(tmp_path.glob("*.tmp")), "staging file survived the write"
+
+
+def test_failed_session_write_leaves_no_staging_file(tmp_path: Path) -> None:
+    """A crash mid-write must not leave a readable partial jar behind."""
+    target = tmp_path / "gv-session.json"
+
+    def boom(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise OSError("disk full")
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(os, "replace", boom)
+        with pytest.raises(OSError):
+            cli._write_session({"cookies": [], "sapisid": "secret"}, target)
+    assert not target.exists()
+    assert not list(tmp_path.glob("*")), list(tmp_path.iterdir())
 
 
 def test_login_parser_defaults_are_safe() -> None:

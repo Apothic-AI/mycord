@@ -24,6 +24,21 @@ def library():  # type: ignore[no-untyped-def]
         pytest.skip(f"no session at {lib.session}; run `gvoice-skill login`")
     if not lib.install_ok:
         pytest.skip(f"dependencies missing in {lib.root}; run `pnpm install`")
+    # A jar can be present and still be dead: cookies expire, and Chrome rotates
+    # `__Secure-1PSIDTS` behind an otherwise-valid SAPISID. That is not a code
+    # regression, so probe once and skip the module rather than failing every test
+    # with the same 401.
+    try:
+        cli.api_call(lib, cli.METHOD_ACCOUNT_GET, [None, 1])
+    except GvoiceError as exc:
+        message = str(exc)
+        if "401" in message or "CREDENTIALS" in message or "COOKIE_INVALID" in message:
+            pytest.skip(
+                "session at "
+                f"{lib.session} is no longer valid ({message.splitlines()[0][:120]}). "
+                "Run `gvoice-skill login` against a profile signed in to voice.google.com."
+            )
+        raise
     return lib
 
 

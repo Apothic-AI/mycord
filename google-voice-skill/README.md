@@ -87,6 +87,11 @@ politeness: Chrome refuses CDP on a profile another instance is using, and mutat
 live profile is a good way to corrupt it. Pass `--no-copy-profile` to drive the real
 directory when you know no other Chrome is running.
 
+> **Do not debug against the real profile directory.** A headless launch pointed at
+> `~/.config/google-chrome/Default` was observed signing the human out — the profile went
+> from a valid `SAPISID` to none at all. Copy the directory instead; that is what `login`
+> does.
+
 The jar lands in `gvoice/gv-session.json` at mode 0600. It authenticates the whole
 Google account, so treat it as a password: it expires, and re-running `login` is the
 fix when the API starts returning `401`.

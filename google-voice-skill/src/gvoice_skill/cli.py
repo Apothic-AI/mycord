@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import stat
 import subprocess
 import sys
@@ -58,12 +59,23 @@ def _emit(payload: Any, as_json: bool) -> None:
 
 
 def _write_session(payload: dict[str, Any], path: Path) -> None:
-    """Write the jar 0600. It authenticates the whole Google account."""
+    """Write the jar 0600, atomically. It authenticates the whole Google account.
+
+    The file is created 0600 *before* it holds anything secret, rather than written and
+    then chmodded — otherwise the cookie values sit in a world-readable file for the
+    duration of the write. The staging name is derived from the target so it stays under
+    the same `gv-session.json*` ignore rule.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(payload, indent=1) + "\n")
-    tmp.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    tmp.replace(path)
+    tmp = path.with_name(f"{path.name}.tmp")
+    handle = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(handle, "w") as fh:
+            fh.write(json.dumps(payload, indent=1) + "\n")
+        os.replace(tmp, path)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def cmd_login(args: argparse.Namespace) -> int:
