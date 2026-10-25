@@ -52,7 +52,7 @@ than improvising an unofficial route.
 | X / Twitter | `mycord-xcom-skill` | no — roadmap | *in progress* |
 | Facebook Messenger | `mycord-messenger-skill` | no — roadmap | [messenger](https://github.com/Apothic-AI/mycord/blob/master/docs/determine/messenger.md) |
 | Microsoft Teams | `mycord-teams-skill` | no — roadmap | [teams](https://github.com/Apothic-AI/mycord/blob/master/docs/determine/teams.md) |
-| Zoom | `mycord-zoom-skill` | *in progress* | *in progress* |
+| Zoom | `mycord-zoom-skill` | **verified full duplex** — PipeWire virtual devices | [zoom](https://github.com/Apothic-AI/mycord/blob/master/docs/determine/zoom.md) |
 | WeChat / WeCom | `mycord-wechat-skill` | not possible | [wechat](https://github.com/Apothic-AI/mycord/blob/master/docs/determine/wechat.md) |
 | Skype | — | — | [retired; no skill planned](https://github.com/Apothic-AI/mycord/blob/master/docs/determine/skype.md) |
 

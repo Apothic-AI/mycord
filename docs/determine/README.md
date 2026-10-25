@@ -12,7 +12,7 @@ no-app-registration way to drive this platform from an agent, and is voice
 | WeChat / WeCom | [wechat.md](wechat.md) | **impossible** (policy-bound) |
 | Skype | [skype.md](skype.md) | retired upstream — **no skill planned** |
 | X / Twitter | *pending* — [brief](briefs/xcom.md) | — |
-| Zoom | *pending* — [brief](briefs/zoom.md) | — |
+| Zoom | [zoom.md](zoom.md) | **verified full duplex** — PipeWire virtual devices |
 
 Also here:
 

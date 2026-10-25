@@ -69,7 +69,7 @@ voice verdict. Signal is the strongest: its voice path is **already proven on th
 | X / Twitter | *determination in progress* | — |
 | Facebook Messenger | see [determination](determine/messenger.md) | **possible** — ordinary WebRTC in the page |
 | Microsoft Teams | see [determination](determine/teams.md) | OS audio + CDP page; no API route |
-| Zoom | *determination in progress* (virtual-device audio under study) | — |
+| Zoom | desktop client via `zoommtg://` for calls + web client over CDP for reads | **verified full duplex** — PipeWire virtual devices |
 | WeChat / WeCom | WeCom server API (not the personal account) | **impossible** (policy-bound) |
 | Skype | **no skill planned** — consumer Skype retired 2025-05-05 | n/a |
 
@@ -82,7 +82,7 @@ would generalize across every conferencing medium:
 | --- | --- | --- |
 | WebRTC peer in the process | `gvoice/` over `werift` | Google Voice |
 | Unix PCM socket | `signal-call-tunnel` (`AUDIO_MODE=pipe`) | Signal |
-| OS virtual audio device (PulseAudio/PipeWire) | *proposed* | any desktop/web client that lets you pick a device — Zoom, Teams |
+| OS virtual audio device (PulseAudio/PipeWire) | **`Zoom`** — verified full duplex, null-sink + remap-source | any desktop/web client that lets you pick a device — Zoom, Teams |
 
 The third is the one worth building toward: a virtual device is client-agnostic, so one
 implementation would serve every medium that cannot expose call audio in-process. It is
