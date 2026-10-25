@@ -98,12 +98,28 @@ behind an otherwise-valid `SAPISID`. The live tests probe `account/get` once and
 module with the 401 in the message, rather than reporting eight identical failures as if
 the code regressed.
 
-**Operational hazard, observed:** a headless Chrome launched against the real
-`~/.config/google-chrome/Default` (rather than a copy) signed the profile out — a valid
-`SAPISID` disappeared and the Voice page began redirecting to a marketing page. That was
-a diagnostic run, not part of the skill, but it is now documented in both `SKILL.md` and
-`README.md` so nobody repeats it while debugging. `login` copies the profile for this
-reason.
+**Capture timing bug (found and fixed after the first push):** the first version of
+`capture_cookies()` attached to whichever page target Chrome offered and read the jar
+immediately. Two failure modes followed:
+
+* a copied profile restores *some other* tab, so the attached page was never the Voice
+  app at all, and
+* even when it was, the app mints its `voice-api` COMPASS cookie at runtime — after the
+  page reports itself loaded.
+
+The result was a jar with a valid-looking `SAPISID`, `SID`, `SSID` and `__Secure-1PSIDTS`
+that the API rejected with `401 SESSION_COOKIE_INVALID`. That is the worst failure shape
+available: the credential looks complete and the error blames the account rather than the
+capture. Capture now navigates the target to Voice and polls until the `voice-api` cookie
+exists, and `login` reports `voice: app cookie present` so a partial jar is visible
+instead of silent.
+
+A wrong initial diagnosis was recorded here first — "the profile signed out, probably
+because a headless launch on the real directory invalidated it". It was retired once the
+live profile was inspected directly: `SAPISID`, `__Secure-1PSIDTS`, and
+`voice.clients6.google.com` COMPASS were all present in the profile the whole time. The
+lesson is in the evidence: the capture, not the profile, was at fault, and three
+consecutive captures now succeed ~2s each.
 
 ## Remaining work (library, not skill)
 

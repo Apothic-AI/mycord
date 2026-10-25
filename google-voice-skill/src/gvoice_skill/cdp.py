@@ -41,9 +41,13 @@ _CHROME_CANDIDATES = (
     "microsoft-edge",
 )
 
-# Two of Google's own endpoints are enough to prove the jar is live; neither is the
-# Voice API, so this probe does not touch the account's messaging state.
+# Landing page for the capture. Navigating here is what makes the Voice app boot and mint
+# its own cookies; it touches no messaging state.
 PROBE_URL = "https://voice.google.com/"
+
+# The cookie the Voice app mints for the API host. Its presence is the difference between
+# "a page loaded" and "the app is ready" — see _await_voice_cookie().
+VOICE_API_COOKIE = "voice-api"
 
 
 class CdpError(RuntimeError):
@@ -229,6 +233,7 @@ def capture_cookies(
     timeout: float = 45.0,
     copy_profile: bool = True,
     headless: bool = True,
+    wait_cookie: str = VOICE_API_COOKIE,
 ) -> list[dict[str, object]]:
     """Start Chrome on `profile` and return every cookie it holds.
 
@@ -297,17 +302,47 @@ def capture_cookies(
         socket_ws = _TinyWebSocket(ws_url)
         try:
             socket_ws.request("Network.enable")
-            result = socket_ws.request("Network.getAllCookies")
-            raw_cookies = result.get("cookies")
-            if not isinstance(raw_cookies, list):
-                raise CdpError("Network.getAllCookies returned no cookie list")
-            return [c for c in raw_cookies if isinstance(c, dict)]
+            socket_ws.request("Page.enable")
+            # Landing on voice.google.com and *loading the app* are different events. The
+            # `voice-api` COMPASS cookie is minted by the app at runtime; capturing before
+            # that yields a jar that looks complete (SAPISID and friends present) and then
+            # fails with 401 SESSION_COOKIE_INVALID. So wait for the cookie itself.
+            cookies = _await_voice_cookie(socket_ws, wait_cookie, timeout)
+            return cookies
         finally:
             socket_ws.close()
     finally:
         _terminate(proc)
         if scratch is not None:
             scratch.cleanup()
+
+
+def _await_voice_cookie(ws: _TinyWebSocket, marker: str, timeout: float) -> list[dict[str, object]]:
+    """Poll the cookie jar until the Voice app has minted its API cookie.
+
+    Also navigates the attached target to Voice first: a copied profile often restores
+    some *other* tab, and whatever page happens to be open may never load the app. If the
+    marker never appears, the jar is still returned — `login` then reports the missing
+    cookie rather than failing outright, because a partial jar is often still usable for
+    read-only work after the app is warm.
+    """
+    send = ws.request
+    deadline = time.monotonic() + timeout
+    navigated = False
+    last: list[dict[str, object]] = []
+    while time.monotonic() < deadline:
+        if not navigated:
+            with contextlib.suppress(CdpError, OSError):
+                send("Page.navigate", {"url": PROBE_URL})
+            navigated = True
+        result = send("Network.getAllCookies")
+        raw = result.get("cookies")
+        if isinstance(raw, list):
+            last = [c for c in raw if isinstance(c, dict)]
+            if any(marker in str(c.get("value", "")) for c in last):
+                return last
+        time.sleep(0.5)
+    return last
 
 
 def _pick_page_target(port: int, browser_ws: str, timeout: float) -> str:

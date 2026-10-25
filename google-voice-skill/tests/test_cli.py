@@ -240,6 +240,64 @@ def test_failed_session_write_leaves_no_staging_file(tmp_path: Path) -> None:
     assert not list(tmp_path.glob("*")), list(tmp_path.iterdir())
 
 
+def test_login_reports_a_missing_voice_cookie(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A jar without the app-minted cookie looks valid and 401s later; say so loudly."""
+    lib = _fake_library(tmp_path / "gvoice")
+    monkeypatch.setenv("GVOICE_ROOT", str(lib))
+
+    def fake_capture(profile, **kwargs):  # type: ignore[no-untyped-def]
+        return [
+            {
+                "name": "SAPISID",
+                "value": "looks-fine",
+                "domain": ".google.com",
+                "path": "/",
+                "secure": True,
+                "httpOnly": False,
+            }
+        ]
+
+    monkeypatch.setattr(cli, "capture_cookies", fake_capture)
+    args = cli.build_parser().parse_args(["login"])
+    assert cli.cmd_login(args) == cli.EXIT_ERROR
+    out = capsys.readouterr().out
+    assert "NO voice-api cookie" in out
+
+
+def test_login_confirms_when_the_voice_cookie_is_present(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    lib = _fake_library(tmp_path / "gvoice")
+    monkeypatch.setenv("GVOICE_ROOT", str(lib))
+
+    def fake_capture(profile, **kwargs):  # type: ignore[no-untyped-def]
+        return [
+            {
+                "name": "SAPISID",
+                "value": "v",
+                "domain": ".google.com",
+                "path": "/",
+                "secure": True,
+                "httpOnly": False,
+            },
+            {
+                "name": "COMPASS",
+                "value": "voice-api=CgAQuOT41gYa",
+                "domain": "voice.clients6.google.com",
+                "path": "/",
+                "secure": True,
+                "httpOnly": False,
+            },
+        ]
+
+    monkeypatch.setattr(cli, "capture_cookies", fake_capture)
+    args = cli.build_parser().parse_args(["login"])
+    assert cli.cmd_login(args) == cli.EXIT_OK
+    assert "app cookie present" in capsys.readouterr().out
+
+
 def test_login_parser_defaults_are_safe() -> None:
     args = cli.build_parser().parse_args(["login"])
     assert args.no_copy_profile is False  # copies the profile by default

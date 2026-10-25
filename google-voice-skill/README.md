@@ -87,10 +87,12 @@ politeness: Chrome refuses CDP on a profile another instance is using, and mutat
 live profile is a good way to corrupt it. Pass `--no-copy-profile` to drive the real
 directory when you know no other Chrome is running.
 
-> **Do not debug against the real profile directory.** A headless launch pointed at
-> `~/.config/google-chrome/Default` was observed signing the human out — the profile went
-> from a valid `SAPISID` to none at all. Copy the directory instead; that is what `login`
-> does.
+Capture does not stop at "a page loaded". The Voice app mints a `voice-api` COMPASS
+cookie at runtime, and without it the API returns `401 SESSION_COOKIE_INVALID` while
+every other cookie looks perfectly valid. So `capture_cookies()` navigates the target to
+Voice and then polls until that cookie appears, and `login` reports
+`voice: app cookie present`. An early version captured the first jar it saw and produced
+exactly that plausible-looking, useless session.
 
 The jar lands in `gvoice/gv-session.json` at mode 0600. It authenticates the whole
 Google account, so treat it as a password: it expires, and re-running `login` is the
@@ -208,6 +210,7 @@ the library, not here.
 | `Chrome opened no page target` | transient; re-run, or use `--headed` |
 | `no SAPISID … cookie in the jar` | the profile is not signed in to Google |
 | `401 CREDENTIALS_MISSING` | partial or expired jar — re-run `login`, do not hand-filter cookies |
+| `401 SESSION_COOKIE_INVALID` | jar is missing the app-minted `voice-api` cookie, or expired — re-run `login` |
 | `403 API_KEY_HTTP_REFERRERR_BLOCKED` | something sent the wrong `Referer`; this is a library bug |
 | `INVALID_ARGUMENT` on `api2thread/list` | body was `[pageSize]`; it needs `[syncToken, pageSize]` |
 | `no speech-to-text backend available` | install parakeet-redux or faster-whisper (see Calling) |

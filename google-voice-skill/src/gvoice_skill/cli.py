@@ -103,16 +103,28 @@ def cmd_login(args: argparse.Namespace) -> int:
             raise
         return EXIT_AUTH
 
+    # The Voice app mints a per-host API cookie at runtime. Without it the jar looks fine
+    # and then fails 401 mid-session, which is the worst failure mode, so say so plainly.
+    has_api_cookie = any("voice-api" in str(c.get("value", "")) for c in payload["cookies"])
     _write_session(payload, target)
     summary = cookie_ops.summarize(payload["cookies"])
     if args.json:
-        _emit({"session": str(target), **summary}, True)
+        _emit({"session": str(target), "voiceApiCookie": has_api_cookie, **summary}, True)
     else:
         print(f"wrote {target} (mode 0600)")
         print(f"  cookies : {summary['count']} across {len(summary['hosts'])} hosts")
         print(f"  sapisid : {'present' if summary['has_sapisid'] else 'MISSING'}")
         print(f"  dupes   : {summary['duplicate_names']} names set on more than one domain")
-    return EXIT_OK
+        print(
+            "  voice   : "
+            + (
+                "app cookie present"
+                if has_api_cookie
+                else "NO voice-api cookie — the app did not finish loading; "
+                "the jar may still work, but re-run login if you see 401s"
+            )
+        )
+    return EXIT_OK if has_api_cookie else EXIT_ERROR
 
 
 def cmd_session(args: argparse.Namespace) -> int:
