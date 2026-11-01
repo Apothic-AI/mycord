@@ -1,6 +1,7 @@
 # mycord-signal-skill — planning and progress
 
-**Updated:** 2026-10-27 (post-reboot verification)
+**Updated:** 2026-11-01 (integrated into master and re-gated there; the live facts below are
+still the 2026-10-27 post-reboot verification)
 
 Scope came from `docs/determine/signal.md` (the determination) and
 `docs/implementation-decision.md` (which mediums get built now), expanded once the account
@@ -18,6 +19,12 @@ went live. Verified host facts live in `docs/determine/signal-live-state.md`.
 | `tests/` (offline + live) | 122 offline passing; 11 live marked |
 | `scripts/provision.sh` | detect + `--apply`; exit 3 when stale |
 | `Makefile`, `SKILL.md`, `README.md` | matching `mycord-slack-skill` conventions |
+
+Gates re-run **inside the integrated tree** on 2026-11-01, not the source worktree: ruff
+check clean, `mypy --strict` clean across 8 source files, **122 passed** offline, and the 11
+live-marked tests skipped as designed (they are env-gated on a running daemon and a linked
+account). The `11 live-marked tests pass` line under *Verified live* is the 2026-10-27
+observation with that gate open, and was not re-run here.
 
 ## The dependency problem, solved
 

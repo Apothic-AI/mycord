@@ -14,13 +14,16 @@ records the plan, what changed against the determination, and the boundary of wh
 | Piece | State |
 | --- | --- |
 | `src/mycord_zoom/{audio,desktop,speech,state,tools,errors,cli}.py` | written; `mypy --strict` clean across 9 source files |
-| `tests/` (offline + live) | **101 offline passing**, 8 live-marked |
+| `tests/` (offline + live) | **101 offline passing**; 8 live passing against this host's real PipeWire server |
 | `Makefile`, `SKILL.md`, `README.md` | matching `mycord-slack-skill` / `mycord-signal-skill` conventions |
 | `audio up/down/status/route/recover`, `audio say`, `audio listen` | implemented |
 | `join` / `status` / `leave` | implemented over `zoommtg://` |
 
 Gates re-run **inside the integrated tree**, not the source worktree: ruff check + format
-clean, `mypy --strict` clean, 101 passed / 8 deselected.
+clean, `mypy --strict` clean, 101 passed / 8 deselected offline, and the live audio plane
+really runs here — `-m live` gives **8 passed** against the host's PipeWire server, not 8
+skips. The virtual-device machinery is therefore live-tested on this machine; what remains
+unproven is Zoom's side of the boundary, not ours.
 
 ## The shape, and why it is not the one the determination sketched
 
