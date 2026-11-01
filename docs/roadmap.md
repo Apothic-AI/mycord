@@ -113,7 +113,7 @@ voice verdict. Signal is the strongest: its voice path is **already proven on th
 | Medium | Chosen path | Voice |
 | --- | --- | --- |
 | Signal | `signal-cli` JSON-RPC daemon + `signal-call-tunnel` PCM socket | **possible, proven** — skill shipped (`mycord-signal-skill/`) |
-| X / Twitter | *determination in progress* | — |
+| X / Twitter | `twifork` (twikit fork) over the web GraphQL with `auth_token` + `ct0` | **possible in principle, unbuildable now** — only implementation is AGPL-3.0 |
 | Facebook Messenger | see [determination](determine/messenger.md) | **possible** — ordinary WebRTC in the page |
 | Microsoft Teams | see [determination](determine/teams.md) | OS audio + CDP page; no API route |
 | Zoom | desktop client via `zoommtg://` for calls + web client over CDP for reads | **verified full duplex** — PipeWire virtual devices; skill shipped (`mycord-zoom-skill/`) |
@@ -123,18 +123,29 @@ voice verdict. Signal is the strongest: its voice path is **already proven on th
 ### Voice transport shapes
 
 Two shapes are proven on this machine, and the determinations surfaced a third that
-would generalize across every conferencing medium:
+has since been built. All three are now implemented:
 
 | Shape | Precedent | Reaches |
 | --- | --- | --- |
-| WebRTC peer in the process | `gvoice/` over `werift` | Google Voice |
-| Unix PCM socket | `signal-call-tunnel` (`AUDIO_MODE=pipe`) | Signal |
-| OS virtual audio device (PulseAudio/PipeWire) | **`Zoom`** — verified full duplex, null-sink + remap-source | any desktop/web client that lets you pick a device — Zoom, Teams |
+| WebRTC peer in the process | `google-voice-skill/` over `gvoice/` | anything whose signalling you can speak |
+| Unix PCM socket | `mycord-signal-skill/` + `signal-call-tunnel` | Signal 1:1 calls; the tunnel owns the peer connection |
+| OS virtual audio device (PulseAudio/PipeWire) | **`mycord-zoom-skill/`** — verified full duplex, null sink + remap-source | any desktop or web client that lets you pick a device |
 
-The third is the one worth building toward: a virtual device is client-agnostic, so one
-implementation would serve every medium that cannot expose call audio in-process. It is
-also the only shape available where the vendor ships a native client and refuses third
-party media (Teams).
+The third generalizes: a virtual device is client-agnostic, so one implementation serves
+every medium that cannot expose call audio in-process, and it is the only shape available
+where the vendor ships a native client and refuses third-party media (Teams, Messenger).
+`mycord-zoom-skill/` implements it; adapting it to another client is new work, not
+configuration.
+
+## Not on the roadmap: Skype
+
+**Do not build `mycord-skype-skill`, and no ASR/TTS item for it.** Consumer Skype was
+retired 2025-05-05; its data was deleted through 2026, `web.skype.com` now serves
+Microsoft Teams, no maintained library or client exists, and the only Skype-branded
+application left (`calling.web.skype.com`) is a paid-legacy PSTN dial pad with no chat.
+Any realtime-agent work on this protocol is Teams-consumer work — page-level WebRTC
+capture/injection of `teams.live.com` — and belongs under R1/R2 and the Teams
+determination. Evidence: [`skype.md`](determine/skype.md).
 
 ## Sequencing note
 
@@ -145,7 +156,7 @@ own embedded copies, which today duplicate the model venvs under
 `~/.local/share/gvoice/`.
 
 R3/R3a need nothing from that layer: R3 is closed on policy, and R3a's blocker is transport,
-not speech.
+not speech. X is not on this list either — its blocker is a licensing decision, not design.
 
 Constraints that still apply from the rest of this repo: no semantic string-parsing, no
 brittle selectors, and confirm with a human before anything that reaches another person.

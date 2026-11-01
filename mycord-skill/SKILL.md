@@ -50,7 +50,7 @@ than improvising an unofficial route.
 | Medium | Planned component | Voice | Determination |
 | --- | --- | --- | --- |
 | WhatsApp | `mycord-whatsapp-skill` | no — roadmap | [whatsapp](https://github.com/Apothic-AI/mycord/blob/master/docs/platform-library-determination.md) |
-| X / Twitter | `mycord-xcom-skill` | no — roadmap | *in progress* |
+| X / Twitter | `mycord-xcom-skill` | **no** — only an AGPL-3.0 library implements X calls | [xcom](https://github.com/Apothic-AI/mycord/blob/master/docs/determine/xcom.md) |
 | Facebook Messenger | `mycord-messenger-skill` | no — roadmap | [messenger](https://github.com/Apothic-AI/mycord/blob/master/docs/determine/messenger.md) |
 | Microsoft Teams | `mycord-teams-skill` | no — roadmap | [teams](https://github.com/Apothic-AI/mycord/blob/master/docs/determine/teams.md) |
 | WeChat / WeCom | `mycord-wechat-skill` | not possible | [wechat](https://github.com/Apothic-AI/mycord/blob/master/docs/determine/wechat.md) |

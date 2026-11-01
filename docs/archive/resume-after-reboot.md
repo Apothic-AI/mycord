@@ -1,8 +1,8 @@
 > **Archived — superseded.** This was the reboot handoff written 2026-10-25T20:05Z. The work it
 > describes has since landed: `mycord-zoom-skill/` and `mycord-signal-skill/` are in master,
 > and the determinations are in `docs/determine/`. Retained for the verified-environment facts
-> and the audio-teardown discipline, which still apply. The one item still open is the X
-> determination — see `docs/determine/briefs/xcom.md`.
+> and the audio-teardown discipline, which still apply. The X determination it lists as open
+> has since been written — see `docs/determine/xcom.md`.
 
 # Resume after reboot — comms skills
 

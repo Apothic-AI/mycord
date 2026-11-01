@@ -375,8 +375,8 @@ nothing about it.
 `docs/determine/` holds a per-medium determination — the optimal no-app-registration
 path, the ranked alternatives, and a voice verdict — for Signal, X, Facebook Messenger,
 Microsoft Teams, Zoom, Skype and WeChat. Signal and Zoom have since shipped as skills;
-Skype is retired upstream and gets no skill; WeChat is closed on policy. X is the one
-still outstanding.
+Skype is retired upstream and gets no skill; WeChat is closed on policy. X is answered but
+structurally fragile, and its only voice implementation is AGPL-3.0 — no skill yet.
 
 ## Roadmap
 
