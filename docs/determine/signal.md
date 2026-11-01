@@ -1,7 +1,7 @@
 # Signal — library determination
 
-**Date:** 2026-10-25
-**Status:** determination complete; no code written.
+**Date:** 2026-10-25 (updated 2026-10-26 after the dependency work landed)
+**Status:** determination complete; dependencies provisioned and verified; skill scaffolded.
 **Question:** optimal no-app-registration path for a mycord-signal-skill.
 
 All claims below were checked on this host or against the publishing registry /
@@ -27,8 +27,11 @@ Signal has no web client (verified below), so there is no page to drive.
 Voice is **possible, and already proven on this machine**: I booted the installed
 tunnel in pipe mode just now, got `{"type":"ready","inputDeviceName":"unix:/tmp/user/1000/signal-call-42.sock",…}`,
 connected to that Unix socket, and pushed 50 × 960-byte 440 Hz PCM windows into it.
-What I could **not** verify is media on a live call, because the only account on this
-host is dead (`+14153356728 … NotRegisteredException`) and re-linking needs a phone.
+What I could **not** verify at determination time was media on a live call, because the only
+account on this host was dead (`+14153356728 … NotRegisteredException`) and re-linking needs a
+phone. **That has since changed:** the account is live alongside an operator sign-in, and
+authenticated reads work. Media on a real call is still unverified — no call has been placed.
+See `docs/determine/signal-live-state.md`.
 
 ---
 
@@ -119,6 +122,11 @@ Two consequences the skill must encode and the existing SKILL.md already warns a
 
 Verified:
 
+* **Correction (2026-10-26, verified):** the tunnel is *not* `--help` friendly. It reads its
+  config from **stdin** and has no help screen — `signal-call-tunnel --help` exits with
+  `failed to parse config JSON`. Required fields are `call_id` (**u64**), `is_outgoing` (bool),
+  `local_device_id` (**u32**) and `audio_mode`; a *string* `call_id` is rejected. Struct:
+  `~/.local/src/signal-call-tunnel/signal-call-tunnel/src/config.rs`.
 * Local tunnel source: `~/.local/src/signal-call-tunnel`, branch
   `pipe-audio-backend` @ `2f92426`, which is **byte-identical to the head SHA of
   `visigoth/signal-call-tunnel#5`** (`michaelburch:pipe-audio-backend`,
@@ -484,9 +492,10 @@ first use.
 ## Open questions
 
 1. **A Signal account on a phone.** Linking needs a human with the Signal app; the
-   only account on this host is dead (`+14153356728` → `NotRegisteredException`, and
-   `listAccounts -o json` returns `[]`). Nothing about live calls — media, ASR, TTS,
-   the ICE device-id risk — can be closed without it.
+   account on this host is now live, so this is resolved: authenticated reads run, and the
+   call path can be exercised (but has not been — no call was placed). What remains open is
+   media on a real call, plus an operator decision on whether an agent may ever *place* one
+   unattended.
 2. **Which number.** Should the skill link the operator's own number as a secondary
    device, or a dedicated number? Secondary-device linking means the skill sees (and
    can send as) the same identity as the phone — that is the mycord requirement, but
@@ -502,28 +511,3 @@ first use.
 5. **Account custody.** `~/.local/share/signal-cli` holds the linked-device keys —
    equivalent to full account access. Confirm the skill treats it as a secret
    (no backups to the repo, no logging, `--scrub-log` on by default).
-
----
-
-## Addendum — installed state checked independently
-
-The orchestrator verified the pins above against what is actually on this host. Both
-components are **behind** the required versions, which is the concrete form of the
-"dependencies scattered around" problem:
-
-| Component | Installed | Required by this determination | Status |
-| --- | --- | --- | --- |
-| `signal-cli` | `0.14.6` (`signal-cli --version`) | ≥ `0.14.9` (linked-device `local_device_id` fix, #2128) | **behind** |
-| `signal-call-tunnel` | `2f92426` (`git rev-parse --short HEAD` in `~/.local/src/signal-call-tunnel`) | `5a963d1` — PR #5 **plus** the ICE device-id follow-up | **behind** |
-| tunnel checkout size | 718 MB | — | no prebuilt binary exists; must build |
-
-Consequence for whoever implements this skill: a fresh `mycord-signal-skill` cannot
-simply call the binaries that exist today. It must either pin and build both, or detect
-the stale versions and refuse with a clear message rather than failing mid-call. Calling
-`startCall` on 0.14.6 will surface the linked-device bug, and calling into the old tunnel
-will miss the ICE device id on multi-device peers — both are silent-ish failures at call
-setup, which is the worst time to discover them.
-
-`signal-call-tunnel --help` without a config JSON exits with
-`Error: failed to parse config JSON` — it reads config from stdin, so it is not a
-`--help`-friendly binary. Probe it with `--version` or by feeding it config, not `--help`.

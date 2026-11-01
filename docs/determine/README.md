@@ -6,13 +6,13 @@ no-app-registration way to drive this platform from an agent, and is voice
 
 | Medium | Determination | Voice |
 | --- | --- | --- |
-| Signal | [signal.md](signal.md) | **possible, proven on this host** |
-| Facebook Messenger | [messenger.md](messenger.md) | **possible** — ordinary WebRTC in the page |
-| Microsoft Teams | [teams.md](teams.md) | OS audio + CDP page; no API route |
+| Signal | [signal.md](signal.md) | **possible, proven on this host** — shipped as `mycord-signal-skill/` |
+| Facebook Messenger | [messenger.md](messenger.md) | **possible** — WebRTC in the page, or virtual devices |
+| Microsoft Teams | [teams.md](teams.md) | **possible** — virtual devices; the browser half is verified |
 | WeChat / WeCom | [wechat.md](wechat.md) | **impossible** (policy-bound) |
 | Skype | [skype.md](skype.md) | retired upstream — **no skill planned** |
 | X / Twitter | *pending* — [brief](briefs/xcom.md) | — |
-| Zoom | [zoom.md](zoom.md) | **verified full duplex** — PipeWire virtual devices |
+| Zoom | [zoom.md](zoom.md) | **verified full duplex** — PipeWire virtual devices; shipped as `mycord-zoom-skill/` |
 
 Also here:
 

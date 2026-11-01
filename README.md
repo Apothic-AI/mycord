@@ -2,8 +2,10 @@
 
 Messaging automation, split into **independent** components: one for Discord
 on [`discord.py-self`][dps], one for Telegram on [`telethon`][telethon], one for
-IRC on [`pydle`][pydle], one for email on [`himalaya`][himalaya], and one for
-Google Voice on [`werift`][werift].
+IRC on [`pydle`][pydle], one for email on [`himalaya`][himalaya], one for
+Google Voice on [`werift`][werift], one for Signal on [`signal-cli`][signalcli]
+plus the `signal-call-tunnel` PCM socket, and one for Zoom, which needs no library
+at all — it drives the desktop client and carries call audio through the system mixer.
 
 > **The Discord component is a selfbot.** It logs in as a Discord *user*,
 > not a bot. That violates Discord's Terms of Service and **can get the account
@@ -16,6 +18,11 @@ Google Voice on [`werift`][werift].
 >
 > **`gvoice/` is an unofficial Google Voice client**, reverse-engineered from
 > traffic. Automating a Google account may violate Google's Terms of Service.
+>
+> **`mycord-zoom-skill/` drives the Zoom desktop client** through the `zoommtg://`
+> URL scheme Zoom registers for itself, which Zoom documents as changeable at any
+> time and markets RTMS *instead of*. It is a local automation tool acting as the
+> account's own human, not a bot with scopes.
 
 ## Components
 
@@ -29,6 +36,8 @@ Google Voice on [`werift`][werift].
 | [`mycord-skill/`](mycord-skill/) | **Start here** — routing skill: which medium, which component to install, whether voice works | no |
 | [`ferdium-skill/`](ferdium-skill/) | Agent skill: drive a Ferdium install over CDP (headless by default) | no |
 | [`mycord-slack-skill/`](mycord-slack-skill/) | Agent skill: Slack with no app registration, full same-as-you access | no |
+| [`mycord-signal-skill/`](mycord-signal-skill/) | Agent skill: Signal as a linked device over `signal-cli`'s JSON-RPC daemon, with 1:1 call audio over a Unix PCM socket | no |
+| [`mycord-zoom-skill/`](mycord-zoom-skill/) | Agent skill: join/leave/observe the Zoom desktop client via `zoommtg://`, with full-duplex call audio through PipeWire virtual devices | no |
 | [`gvoice/`](gvoice/) | Unofficial Google Voice client in TypeScript: SMS over HTTP, calls over SIP-on-WebSocket | no |
 
 Every component stands alone. Telegram and IRC are separate platforms and
@@ -118,6 +127,59 @@ mycord-email envelope list --page-size 10
 Instructions for agents live in
 [`mycord-email-skill/SKILL.md`](mycord-email-skill/SKILL.md).
 
+### `mycord-signal-skill/` — Signal agent skill
+
+For agents and operators. Signal has no bot API, but a *linked device* is a first-class
+client — which is exactly what `signal-cli` becomes. Reads, sends and reactions go through
+its JSON-RPC daemon; 1:1 call audio goes through `signal-call-tunnel`, which owns the
+RingRTC peer connection and exposes each call as raw PCM on a per-call Unix socket
+(48 kHz mono s16le, 960-byte windows, read = remote audio, write = your mic).
+
+Both components must be at pinned versions and a mismatch only bites *inside* a call, so
+`doctor` and `call-guard` refuse up front with exit 3 and the exact remediation — the
+refusal is the feature. `send` and `call start` are dry runs without `--confirm`, so an
+agent exploring the surface cannot reach a person.
+
+```bash
+cd mycord-signal-skill
+uv sync --all-extras
+uv run mycord-signal doctor        # 0 = call-ready, 3 = stale pin / no daemon / no account
+uv run mycord-signal contacts --json
+uv run mycord-signal send --to +1555… -m "…"            # dry run
+```
+
+Instructions for agents live in
+[`mycord-signal-skill/SKILL.md`](mycord-signal-skill/SKILL.md).
+
+### `mycord-zoom-skill/` — Zoom agent skill
+
+Zoom publishes no local API for the ordinary desktop client, and every developer surface
+(Meeting SDK, RTMS) needs a registered Marketplace app. Both halves of this skill avoid
+that: join/leave/observe uses the `zoommtg://` URL scheme the client registers for itself —
+the same link a human clicks — and call audio uses the fact that Zoom is an ordinary client
+of the system mixer.
+
+The audio plane is three nodes rather than two: Zoom plays into a sink the agent monitors,
+and records from a source fed by a separate sink the agent writes to. One sink cannot serve
+both directions without feeding Zoom's own voice back into Zoom's microphone, which is why
+this needs no echo guard. Teardown restores your default sink and source **first**, then
+unloads, so a failed unload still leaves you hearing your own audio; `audio recover`
+finishes an interrupted teardown. TTS and ASR reuse `gvoice`'s Piper and
+parakeet/whisper workers — nothing is reimplemented and no model is downloaded.
+
+```bash
+cd mycord-zoom-skill
+uv sync --all-extras
+uv run mycord-zoom audio up                      # inert: creates devices, moves nothing
+uv run mycord-zoom join "https://zoom.us/j/1234567890"
+uv run mycord-zoom audio route --to-agent
+uv run mycord-zoom audio say "Hello, I'm an agent."
+uv run mycord-zoom audio down                    # ALWAYS
+```
+
+Instructions for agents live in
+[`mycord-zoom-skill/SKILL.md`](mycord-zoom-skill/SKILL.md).
+
 ### `gvoice/` — Google Voice client
 
 The odd one out, and independent on the same terms: TypeScript, its own `pnpm`
@@ -162,6 +224,10 @@ traps that cost real debugging time in [`gvoice/README.md`](gvoice/README.md).
   caveat instead of the selfbot one.
 * You want the **raw Google Voice protocol** to build on — `gvoice/` itself.
 * You want **Slack**, with the same access you have in the browser — `mycord-slack-skill/`.
+* You want **Signal**, or a real two-way call with a Signal contact — `mycord-signal-skill/`.
+  It refuses the call path loudly rather than failing mid-call when the pins are stale.
+* You want to **join, listen to or speak into a Zoom meeting** — `mycord-zoom-skill/`, which
+  carries full-duplex audio without a Marketplace app.
 * You do not yet know **which medium or component** you need — start at
   `mycord-skill/`, which routes to all of them and says what is shipped vs. planned.
 * You want to drive **any service already configured in Ferdium** (WhatsApp, and any
@@ -193,6 +259,15 @@ mycord/
 │   ├── src/mycord_slack/ # session capture, api passthrough, read verbs
 │   ├── tests/
 │   └── SKILL.md
+├── mycord-signal-skill/          # Signal: JSON-RPC daemon + 1:1 call PCM socket
+│   ├── src/mycord_signal/ # deps/pin detection, rpc client, reads, send, calls
+│   ├── scripts/provision.sh # GPG-verified signal-cli install + tunnel build
+│   ├── tests/
+│   └── SKILL.md
+├── mycord-zoom-skill/            # Zoom: zoommtg:// deep links + PipeWire audio plane
+│   ├── src/mycord_zoom/ # audio plane, desktop control, speech, CLI
+│   ├── tests/
+│   └── SKILL.md
 ├── google-voice-skill/           # Google Voice agent skill over gvoice/
 │   ├── src/gvoice_skill/ # session capture, proto decoding, CLI
 │   ├── tests/
@@ -201,10 +276,10 @@ mycord/
 │   ├── src/             # HTTP control plane, SIP signalling, media plane
 │   ├── tools/           # cookie-jar capture, external-agent example
 │   └── package.json
-└── docs/archive/         # historical research notes
+└── docs/                 # determinations, roadmap, planning records
 ```
 
-The three Python components are standalone projects with their own
+The Python components are standalone projects with their own
 `pyproject.toml`; `gvoice/` is a standalone pnpm workspace with its own
 `package.json` and lockfile.
 
@@ -216,8 +291,14 @@ cd mycord-email-skill     && uv sync --all-extras && uv run pytest
 cd google-voice-skill     && uv sync --all-extras && uv run pytest -m "not live"
 cd ferdium-skill          && uv sync --all-extras && uv run pytest -m "not live"
 cd mycord-slack-skill     && uv sync --all-extras && uv run pytest -m "not live"
+cd mycord-signal-skill    && uv sync --all-extras && uv run pytest -m "not live"
+cd mycord-zoom-skill      && uv sync --all-extras && uv run pytest -m "not live"
 cd gvoice                 && pnpm install && pnpm typecheck
 ```
+
+`-m "not live"` is the offline suite. Both new skills also carry live tests that touch the
+real audio server, the real daemon or a real meeting; those create and destroy real devices,
+so they are opt-in (`make test-live`).
 
 ## Development
 
@@ -244,6 +325,14 @@ make setup && make lint && make typecheck && make test
 
 # mycord-slack-skill
 cd mycord-slack-skill
+make setup && make lint && make typecheck && make test
+
+# mycord-signal-skill
+cd mycord-signal-skill
+make setup && make lint && make typecheck && make test
+
+# mycord-zoom-skill
+cd mycord-zoom-skill
 make setup && make lint && make typecheck && make test
 
 # gvoice
@@ -285,19 +374,22 @@ nothing about it.
 
 `docs/determine/` holds a per-medium determination — the optimal no-app-registration
 path, the ranked alternatives, and a voice verdict — for Signal, X, Facebook Messenger,
-Microsoft Teams, Zoom, Skype and WeChat. Signal's voice path is proven on this host;
-Skype is retired upstream and gets no skill.
+Microsoft Teams, Zoom, Skype and WeChat. Signal and Zoom have since shipped as skills;
+Skype is retired upstream and gets no skill; WeChat is closed on policy. X is the one
+still outstanding.
 
 ## Roadmap
 
 Committed future work — including voice (ASR + TTS) for WhatsApp and Slack calls — is
-tracked in [`docs/roadmap.md`](docs/roadmap.md). Nothing there is in progress.
+tracked in [`docs/roadmap.md`](docs/roadmap.md). R3/R3a (WeChat) are closed rather than
+deferred; the rest is not in progress.
 
 ## Archived research
 
-[`docs/archive/`](docs/archive/) holds the `selfcord.py` migration evaluation
-and the Python 3.10 compatibility study that preceded the current
-discord.py-self approach. Superseded — kept for history.
+[`docs/archive/`](docs/archive/) holds the `selfcord.py` migration evaluation, the
+Python 3.10 compatibility study that preceded the current discord.py-self approach, and
+the 2026-10-25 reboot handoff. Superseded — kept for history, except the audio-teardown
+discipline and verified host facts in the handoff, which still apply.
 
 ## License
 
@@ -308,3 +400,4 @@ MIT.
 [pydle]: https://codeberg.org/shiz/pydle
 [himalaya]: https://github.com/pimalaya/himalaya
 [werift]: https://github.com/shinyoshiaki/werift-webrtc
+[signalcli]: https://github.com/AsamK/signal-cli

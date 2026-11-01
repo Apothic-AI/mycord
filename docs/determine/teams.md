@@ -319,10 +319,59 @@ signed-in user and exchange audio that the agent can inject and capture. Every c
 verified; the composition is not, and it cannot be verified without sitting in a real
 meeting with a real account — which this brief forbids.
 
-Also **unverified**: whether a headless Chrome instance keeps the WebRTC audio graph alive
-the way headed Chrome does. `ferdium-skill`'s docstring records the analogous lesson for
-Electron ("Headless means Xvfb, not a native headless mode"); expect to need Xvfb rather
-than `--headless=new` for calls.
+### Virtual-device audio (post-Zoom finding)
+
+**Does the Zoom finding change the verdict? No — but it promotes the transport from
+"plausible, one tone test" to "verified end-to-end for the browser half, by a different
+method than I used", and it corrects one expectation of mine.** Zoom's determination
+established that a *native* client which registers with PipeWire as an ordinary audio
+client (`ZOOM VoiceEngine`) can be fed and captured through a `module-null-sink` +
+`module-remap-source` pair, with live streams re-pointable by
+`pactl move-sink-input` / `move-source-output`. Zoom is a native app; Teams-for-voice here
+is a **browser page**, so the transfer is not automatic. I tested the transfer directly,
+unauthenticated, with no account and no vendor service contacted
+(`/tmp/det-teams-voice-probe2.sh`, `…probe3.sh`, logs `/tmp/det-teams-voice.log`,
+`/tmp/det-teams-voice3.log`):
+
+| Step | Method | Result |
+| --- | --- | --- |
+| Chrome appears as an ordinary mixer client | `pw-cli ls Client` | `application.name = "Google Chrome"` and `"Google Chrome input"` — the browser analogue of `ZOOM VoiceEngine` |
+| **OUT: agent captures what the page plays** | playback stream re-pointed with `pactl move-sink-input <id> det_teams_vspk`, captured from `det_teams_vspk.monitor` | **`frames=160139 peak=32435` — page audio reached the agent at effectively full scale** |
+| Re-pointing a *live browser* stream works | 2 Chrome sink-inputs moved mid-playback | rc=0 for both, destination confirmed |
+| **IN: page receives what the agent writes** | tone into `det_teams_vspk`, `parec`/analyser in page | page RMS **max 0.3222** |
+| Control (is it signal or noise floor?) | same page, tone not yet played | baseline RMS **exactly 0**, then rises and decays — **signal, not floor** |
+| Device selectable **by name, without hijacking the system default** | `enumerateDevices()` then `getUserMedia({audio:{deviceId:{exact}}})` | `det_teams_vmic` listed; bound; **system default source left untouched** the whole run |
+| `--headless=new` keeps the audio graph | same page, headless, no Xvfb | device bound, RMS **max 0.5563** during tone vs baseline 0 |
+
+Three consequences, in order of importance for the implementation:
+
+1. **The OUT direction needs no cooperation from Teams at all.** `move-sink-input` operates
+   on the stream at the mixer, so it does not matter which output device the page chose or
+   whether it honours a system default. This is strictly more robust than configuring the
+   app, and it is the same mechanism Zoom's determination verified for a native client.
+2. **The IN direction no longer depends on Teams offering the device in a dropdown.** For a
+   web client, device choice belongs to the browser, and Chrome both enumerates the remap
+   source and binds it by `deviceId`. That shrinks the residual unknown relative to Zoom's:
+   what remains is not "will the app list the device" but "does Teams' own audio pipeline
+   (AEC/AGC/noise suppression, and any constraint it applies to `getUserMedia`) degrade
+   injected PCM" — a real question, unresolved, and the reason the `teams-for-linux`
+   `disableAutogain.js` tool exists.
+3. **My earlier expectation that headless would need Xvfb was wrong.** `--headless=new`
+   enumerated, bound and received audio (`max 0.5563`). Xvfb stays the safe fallback for
+   the *video* and UI surface, but it is not required for the audio path.
+
+What this does **not** establish, and must not be read as establishing: that Teams will
+*join a call* and exchange audio this way. Verified are the browser's mixer behaviour, the
+remap path in both directions, and device binding. Unverified are Teams' own DSP, the
+join/leave flow, and whether a real meeting produces the same numbers. **The verdict is
+unchanged — voice is impossible via any API, possible as a participant over virtual devices
+— but the transport is now the best-evidenced part of this determination rather than its
+weakest.**
+
+One operational caution observed: the enumeration list already contained `DetMsgMicrophone`
+from another agent's probe. Virtual devices are global, host-wide names; two concurrent
+sessions using `det_teams_vmic` would silently share a microphone. Device names must be
+per-session unique and torn down in a `try/finally`.
 
 ### Which existing shape this follows
 
@@ -355,18 +404,21 @@ stream.
 > web client.
 >
 > The transport shape is a **third** one for this repo, not the `gvoice/` SIP+`werift` shape
-> and not the `signal-cli` PCM-socket shape: a PipeWire virtual sink plus a remap-source
-> (verified working on this host — tone injected into the sink was captured from the
-> remapped source at peak 32768), with the Teams web client driven over CDP in Chrome and
-> its microphone/speaker pinned to those devices. TTS plays into the sink; remote audio is
-> captured from the sink monitor.
+> and not the `signal-cli` PCM-socket shape: a PipeWire virtual sink plus a remap-source,
+> with the Teams web client driven over CDP in Chrome. Both directions are verified for a
+> browser page on this host (`/tmp/det-teams-voice.log`, `/tmp/det-teams-voice3.log`):
+> `pactl move-sink-input` delivers page playback to the agent's capture at full scale
+> (peak 32435 of 32768), and Chrome enumerates the remap source and binds it by `deviceId`
+> so agent audio reaches the page (RMS 0.32 against a baseline of exactly 0) **without
+> changing the system default device**. `--headless=new` keeps the audio graph, so Xvfb is
+> not required for audio.
 >
-> Unknowns to settle before implementation: whether the Teams web client keeps its WebRTC
-> audio graph alive under Xvfb (headless Chrome is expected not to); how to grant
-> persistent mic permission to `teams.cloud.microsoft` in a copied profile; whether Teams'
-> own AEC/AGC needs disabling (the `teams-for-linux` project ships
-> `app/browser/tools/disableAutogain.js` for exactly this); and speaker attribution, since
-> Teams mixes remote participants into one stream before it reaches the device.
+> Unknowns to settle before implementation: whether Teams' own AEC/AGC/noise suppression
+> degrades injected PCM (the `teams-for-linux` project ships
+> `app/browser/tools/disableAutogain.js` for exactly this); how to grant persistent mic
+> permission to `teams.cloud.microsoft` in a copied profile; the join/leave flow; and
+> speaker attribution, since Teams mixes remote participants into one stream before it
+> reaches the device.
 >
 > Reuse the ASR/TTS layer per the sequencing note below rather than duplicating it a third
 > time.

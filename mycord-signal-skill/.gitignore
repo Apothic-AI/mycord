@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+*.egg-info/
+
+# Never commit anything from the account store. `~/.local/share/signal-cli` holds the
+# linked-device keys, which are equivalent to full account access. Nothing in this skill
+# writes there, but a copy of it must never appear in the repo either.
+signal-cli-data/
+*.account.db

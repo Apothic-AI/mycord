@@ -212,7 +212,8 @@ Three independent reasons, in increasing order of hardness:
    *correlates flows* and identifies peers — it does not describe a usable signalling or
    media protocol. Neither of this repo's two working shapes (`gvoice`'s `werift` SIP/WSS
    peer connection, `signal-call-tunnel`'s Unix PCM socket) has an analogue: there is no
-   peer to negotiate with and no socket to open.
+   peer to negotiate with and no socket to open. **This objection is narrower than it
+   first appears — see *Virtual-device audio* below, which retires it as a media argument.**
 2. **The only working technique is injection.** The public examples of getting bytes into a
    WeChat call are Android hooks like `carrys17/HookWxVoiceCall`, which patch
    `AudioRecord.read` inside the WeChat process. That is process tampering, i.e. the
@@ -228,6 +229,63 @@ call in some other product as an ordinary participant and relay — e.g. a meeti
 with its own API. That is not "voice for mycord-wechat", it is "use a different product for
 meetings", and I did not verify any specific meeting product here; it is out of scope for
 this determination. I would not build it under this skill's name.
+
+### Virtual-device audio (post-Zoom finding)
+
+The Zoom determination (`tooling/mycord/docs/determine/zoom.md`) verified a **third
+transport shape** on this host that neither `gvoice` nor `signal-call-tunnel` represents:
+OS-level virtual audio devices. `module-null-sink` becomes the "speaker" the app believes
+it plays to, `module-remap-source` on that sink's monitor becomes the "microphone" the app
+believes it records from, a 1 s 440 Hz tone written to the sink was captured back out of the
+remapped source at full scale (peak 32768, 163 840 frames), and live streams were
+re-pointed with `pactl move-sink-input` / `move-source-output` (rc=0, destination
+confirmed). Zoom identifies to the mixer as an ordinary `ZOOM VoiceEngine` client. No kernel
+module, no root, no RTP to terminate.
+
+**It retires my first reason.** Reason 1 above treats "no published signalling" as the
+blocker, and that is wrong as a *media* argument: with virtual devices you never parse the
+vendor's signalling and never terminate its media — you own the mixer the client is already
+talking to. Any client whose audio goes through PulseAudio/PipeWire is a candidate
+regardless of protocol. I can no longer defend "no transport" as an impossibility claim.
+
+**It does not change the verdict, because the blocker was never only the media plane.**
+
+1. **The control plane has no equivalent of `zoommtg://`.** What made Zoom's shape reachable
+   was a deep link that joins a meeting with no account and no token. WeChat has none: the
+   Flathub desktop entry is `Exec=wechat %U` with **no `MimeType=x-scheme-handler/…` line**,
+   i.e. WeChat registers no URI scheme at all (verified from
+   `flathub/com.tencent.WeChat`'s `com.tencent.WeChat.desktop`). To be *in* a call you must
+   first QR-scan a login with a human's phone, then drive the Qt UI to a contact and press
+   call — which is exactly the AT-SPI/XTEST automation already rejected in this document.
+   Voice therefore adds no new permission; it inherits the prohibition I already declined.
+2. **Policy is unchanged, and voice adds surface rather than removing it.** §1.2.6/§1.2.7
+   still apply, and being a live speaking participant as the account holder is a strictly
+   worse act than reading and writing text — the DMCA notice against the decryption tools
+   also quotes the AUP clause on "automation software … designed to modify or interfere with
+   WeChat Software".
+
+**Being fair to the shape: for WeChat it would probably be *easier* than for Zoom.** The
+Flatpak manifest declares `--socket=pulseaudio` and `--device=all`, and I verified the
+sandbox does share `/run/user/1000/pulse/native`, so the client is an ordinary mixer client
+like Zoom is. Community reports of the Linux 4.0 client say calls work under "Xorg +
+PulseAudio", which is this machine's configuration, and video calls are an advertised 4.1
+feature. So *if* the policy bar were relaxed, the media half is likely tractable — **labelled
+inference, not tested: WeChat was never installed or run, and no call was attempted.**
+
+**For the chosen WeCom path, virtual devices help nothing**, and this is the part that
+matters for what gets built. There is no local WeCom client to attach them to as far as I
+could verify — `flatpak search wecom` returns nothing, there is no apt package, and the two
+download URLs I probed 404'd; the only "Linux" string on `work.weixin.qq.com` sits in a
+*server-deployment* card, not a desktop client offer. And the 会议 API is scheduling and
+participant metadata only — its documented surface is 预约会议 / 获取会议详情 /
+获取成员会议ID列表 / 获取实时会中成员列表 / 等候室记录, with **no media transport anywhere in
+it** (verified by reading the doc navigation on `90236`). So the WeCom verdict stands
+exactly as written: file-based voice messages, no call audio.
+
+**Net effect:** medium's verdict unchanged; one supporting reason replaced by a stronger
+one. WeChat personal calls remain impossible to do legitimately — not because the audio is
+unreachable, but because reaching it requires taking over a signed-in client's UI and
+speaking as its owner, which the platform's terms forbid and actively enforce.
 
 **WeCom voice:** 客服 and app messages support `voice` as a **file-based voice message** —
 `kf/send_msg` documents `voice` among its sendable types ("文本、图片、语音、视频、文件、图文、
@@ -254,11 +312,10 @@ audio = no.**
 
 > ## R3a — Voice for WeChat personal calls: **impossible**
 >
-> No published signalling or media transport exists; the only demonstrated injection
-> techniques require patching the client's `AudioRecord`/memory (Android hooks) or driving the
-> desktop client's audio devices through an unauthorised automation layer. Both are the
-> prohibited act in R3. Closing this permanently; do not re-open without a change in Tencent's
-> terms.
+> Not because the audio is unreachable — the OS-mixer route is real and now proven (see
+> `zoom.md`). Because getting into a call means taking over a signed-in client's UI and
+> speaking as its owner, which is the prohibited act in R3. Closing this permanently; do not
+> re-open without a change in Tencent's terms.
 
 ---
 
@@ -407,6 +464,11 @@ Everything below was measured in this session, not recalled.
 | `wechatpy` has an enterprise module | downloaded the wheel, listed `wechatpy/enterprise/*` |
 | Linux DB key extraction is real and already a DMCA target | `TANGandXUE/wcdb-key-tool` README; `ylytdeng/wechat-decrypt` blocked (`dmca` reason in GitHub API) |
 | WeCom has no deep history; archive API reaches 5 days, is paid + admin-enabled | docs `101365` ("只可获取5天内的会话记录数据"), `91774`, `100252`; all endpoint paths in the verb table (`91039`, `90236`, `90201`, `90208`, `94677`, `94670`, `94691`, `90253`/`90254`) checked against the doc pages |
+| Virtual-device audio is a viable third transport shape (from the Zoom determination) | `tooling/mycord/docs/determine/zoom.md` §"The transport: PipeWire/Pulse virtual devices" — null sink + remap-source, tone replayed at peak 32768 / 163 840 frames, `move-sink-input`/`move-source-output` rc=0 |
+| WeChat registers **no** URI scheme, so there is no `zoommtg://`-style control plane | `flathub/com.tencent.WeChat`'s `com.tencent.WeChat.desktop`: `Exec=wechat %U`, no `MimeType=x-scheme-handler/…` |
+| WeChat Flatpak reaches the host mixer like any client | manifest declares `--socket=pulseaudio` + `--device=all`; sandbox `ls $XDG_RUNTIME_DIR` showed `pulse`; host `/run/user/1000/pulse/native` present |
+| No verifiable WeCom Linux desktop client; 会议 API carries no media | `flatpak search wecom` → no matches; no apt package; two download URLs 404; `work.weixin.qq.com` "Linux" hit is a server-deployment card; doc `90236` nav lists only scheduling/participant endpoints |
+| **Not tested:** whether WeChat 4.1.13 honours a virtual microphone in an actual call | WeChat was not installed or run; no call attempted. Inference only. |
 
 **Not verified, explicitly labelled:**
 

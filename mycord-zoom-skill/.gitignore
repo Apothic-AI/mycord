@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+dist/
+*.egg-info/
+
+# The recorded audio session names the operator's own devices and is meaningless on another
+# machine; it is also the file that must survive a crash, so it is never committed.
+audio-session.json*

@@ -9,7 +9,7 @@ check:  ## Verify every component the shipped table names actually exists
 	@cd .. && missing=0; \
 	for c in mycord-discord-skill mycord-telegram-skill mycord-slack-skill \
 	         google-voice-skill mycord-irc-skill mycord-email-skill \
-	         ferdium-skill gvoice; do \
+	         mycord-signal-skill mycord-zoom-skill ferdium-skill gvoice; do \
 	  if [ -d "$$c" ]; then echo "ok      $$c"; else echo "MISSING $$c"; missing=1; fi; \
 	done; \
 	exit $$missing

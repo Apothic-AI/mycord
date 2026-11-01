@@ -175,11 +175,15 @@ match on `facebook.com`, not `messenger.com`.
 
 ## Voice assessment
 
-**Verdict: possible — and this is the only medium in the fan-out whose calls are reachable
-end-to-end without a vendor API.** Everything below was proven on this machine today, in
-local loopback, with no account and no network peers. Which real Messenger call transport
-(Meta's own SFU) will look like is **expected, not verified** — that needs a signed-in
-account, which I do not have.
+**Verdict: possible — calls are reachable end-to-end without a vendor API or an app.**
+Everything below was proven on this machine, in local loopback, with no account and no
+network peers. Which real Messenger call transport (Meta's own SFU) will look like is
+**expected, not verified** — that needs a signed-in account, which I do not have.
+
+> Revised after the Zoom determination established a third transport shape on this host:
+> the recommended path is now **virtual mixer devices**, not an in-page tap. See
+> *Virtual-device audio (post-Zoom finding)* below; the in-page material that follows is the
+> fallback and the evidence that Chrome can be driven as a deterministic audio peer.
 
 Messenger calls in the web client are ordinary WebRTC (`RTCPeerConnection`, SDP offer/answer,
 opus). Signalling rides the same socket as messaging — every Messenger client's topic list
@@ -232,7 +236,8 @@ observe/replay socket frames (`Network.webSocketFrameReceived` / `webSocketFrame
 Note what CDP **cannot** do: there is no "give me decoded audio" domain. `WebAudio` exposes
 `getRealtimeData` (per-context meter values, not samples), `Media` exposes player metadata,
 and `Cast` can mirror a tab. So capture is either an in-page tap or a sink monitor — the two
-paths above.
+paths above. A third shape exists that needs neither Chrome API: virtual mixer devices, and
+it is the recommended one (see *Virtual-device audio* below).
 
 **Comparison to the two existing precedents.** `gvoice/` owns the media plane off-browser in
 `werift` because Google Voice hands out routable WebRTC. Messenger cannot follow that shape:
@@ -242,17 +247,101 @@ is the *right* contract but the wrong layer — there is no native Messenger dae
 it. What Messenger *can* match is `gvoice`'s **control surface**: `control.ts` serves
 `/events` (SSE) plus `/say`, `/press`, `/hangup`. The Messenger equivalent is a small
 supervisor that holds the CDP page, exposes `/events` (transcripts as they arrive),
-`/say` (write PCM into the generator worklet), and `/hangup`. Same design, different
-transport — exactly the "reuse the design, not the code" note already in `docs/roadmap.md`.
+`/say` (write PCM into a PipeWire sink, or into the generator worklet — see the
+virtual-device subsection), and `/hangup`. Same design, different transport — exactly the "reuse the design, not the code" note already in `docs/roadmap.md`.
+
+### Virtual-device audio (post-Zoom finding)
+
+The Zoom determination (`docs/determine/zoom.md`, main repo) established a **third voice
+transport shape on this host**: PipeWire/Pulse virtual devices — `module-null-sink` as the
+"speaker" an app sees, `module-remap-source` on its monitor as the "microphone", with
+`pactl move-sink-input` / `move-source-output` to re-point live streams. No kernel module,
+no root, no RTP to terminate. Zoom appears to the mixer as an ordinary client
+(`ZOOM VoiceEngine`).
+
+**Does this change the Messenger verdict? It refines it — it does not overturn it.** Voice
+was already "possible"; what changes is that capture no longer has to depend on hooking the
+page's WebRTC objects, which was the most fragile part of the plan. Chrome is an ordinary
+mixer client too — its binary references `libpipewire-0.3.so.0` and `libpulse.so.0`
+(`strings -a /opt/google/chrome/chrome`) — so the same shape applies to a browser medium,
+*provided* the page lets a user pick devices, which a call client's settings must.
+
+**Verified for this medium, on this host, today** (ordinary Chrome, no
+`--use-fake-device-for-media-stream`, no `--use-file-for-fake-audio-capture`; only
+`--use-fake-ui-for-media-stream` to skip the permission prompt; full log
+`/tmp/det-messenger.log`):
+
+| Leg | What was done | Result |
+| --- | --- | --- |
+| Chrome lists the virtual devices | `pactl load-module module-null-sink sink_name=detmsg_spk` + `module-remap-source master=detmsg_spk.monitor source_name=detmsg_mic`; page calls `enumerateDevices()` | both appear by their `device.description`: `DetMsgMicrophone` in `audioinput`, `DetMsgSpeaker` in `audiooutput` |
+| Page selects the virtual mic | `getUserMedia({audio:{deviceId:{exact:…}, echoCancellation:false, noiseSuppression:false, autoGainControl:false}})` | `trackLabel = "DetMsgMicrophone"` — explicit selection works, not just "Default" |
+| **Inject (agent → page)** | page selects `DetMsgMicrophone`, plays nothing; agent pipes 440 Hz at amplitude `9000/32768` into `detmsg_spk` with `pacat` | page's Worklet tap reads `peak 0.2747` — **an exact match to the injected amplitude**; `muted:false`, `readyState:live` |
+| **Control** | separate run of the same page by the same procedure, nothing injected | page reads `peak 0.0000` — no self-noise, so the row above is injection and not leakage |
+| **Capture (page → agent)** | page plays an 880 Hz tone at gain 0.4 into its selected output; agent runs `parec --device=detmsg_spk.monitor --format=s16le` | `peak 0.4000`, `rms 0.2784` — exact match to the page's gain |
+| Injection observed at the mixer too | injection only, no page playback | monitor `peak 0.2747 rms 0.1896` — the same amplitude the page heard, so both ends agree on one signal |
+| Mixer-only path, no browser | `pacat` → sink → `parec` from the remap source | `peak 0.3052 rms 0.1526` — the remap itself is sound, independent of Chrome |
+| Re-point a live stream | `pactl move-sink-input <id> detmsg_spk` against 3 live Chrome sink-inputs | `rc=0` for all three |
+
+So for Messenger the virtual-device shape gives **both directions through the mixer alone**:
+write PCM to a sink to speak, read PCM from the remap source to hear. No `getUserMedia`
+override, no `RTCPeerConnection` patching, no dependency on Meta's signalling at all.
+
+**This is a genuine improvement over the in-page path, for three reasons.** It survives a
+redesign of the call UI, because it depends on device selection (a stable, user-facing
+feature) rather than on object internals. It is the same code for every browser-based
+medium, which is exactly the "extract it once" argument `docs/roadmap.md` makes for R1/R2 —
+the audio plane becomes `mycord-audio`, with `werift` (gvoice) and a PipeWire node
+(this) as its two transports. And it gives a fallback if a future Messenger build wraps
+`RTCPeerConnection` in a way that defeats monkey-patching.
+
+**What is inference, not verified.** I did not place a Messenger call, so the following are
+reasoning, labelled as such:
+
+- **Whether Messenger's call UI exposes a microphone/speaker picker at all** is
+  **unverified**. I could not reach call settings without an account. This is the same
+  residual unknown Zoom's determination records for its audio panel, and for the same
+  reason. It is *expected* — a browser call client that did not offer device selection would
+  be unusable for anyone with a headset — but expectation is not evidence.
+- **Whether device selection can be driven from the page programmatically** (rather than by
+  a human clicking a dropdown) is **unverified**. Two routes are plausible: Messenger may
+  persist the choice in IndexedDB/localStorage so a seeded profile inherits it, or the
+  picker may be reachable over CDP. Neither was tested.
+- **Headless was verified to list both virtual devices** (`--headless=new`, no fake-device
+  switches). I did not compare its device list against a headed run, and Messenger's own
+  behaviour under headless is untested.
+- Because Messenger calls are E2EE, the far-end audio the page receives is decrypted inside
+  the page before playout. The mixer path captures it **after** decryption at the sink, which
+  is why it works without the Signal layer — but that also means the agent's PCM is
+  plaintext on the local machine and in the PipeWire graph. Same exposure as any screen
+  recorder; worth stating in the skill's safety rails.
+
+**Recommendation, revised:** prefer the virtual-device plane as the *primary* voice
+transport for this skill, with the in-page Worklet tap as the fallback if Messenger turns
+out not to honour a selected device. Both are verified to work in Chrome on this host; only
+the device-picker question is open, and it is one live call away from being answered. The
+first implementation task for phase 3 is therefore to confirm the picker, not to build
+WebRTC plumbing.
 
 ### Roadmap consequence
 
 Because voice is reachable, Messenger does **not** need an ASR/TTS entry on
-`docs/roadmap.md` today. What it needs instead is an entry for the *shared speech layer*
-`docs/roadmap.md` already argues for (R1/R2's sequencing note): Messenger would be the second
-medium wanting Piper + Parakeet, which is the trigger that note describes. If a roadmap line
-is wanted before phase 3 starts, it should be that shared service — not a Messenger-specific
-"voice someday" item that implies the transport is still unknown.
+`docs/roadmap.md` today. What it needs instead is an entry for the *shared audio + speech
+layer* `docs/roadmap.md` already argues for (R1/R2's sequencing note): Messenger is now the
+second medium wanting Piper + Parakeet **and** the second wanting a PCM transport, so it is
+the trigger that note describes. Proposed roadmap text:
+
+> **Shared `mycord-audio` plane — PCM in, PCM out, per-medium transports**
+> Extract the speech stack (parakeet-redux / faster-whisper, Piper, VAD, echo guard) and a
+> single PCM contract once, with two transports behind it: `werift` RTP for Google Voice,
+> and PipeWire virtual devices (`module-null-sink` + `module-remap-source`, `pactl
+> move-sink-input` / `move-source-output`) for anything that runs in a browser or as an
+> ordinary mixer client — Messenger, Slack huddles, Meet-in-browser, Zoom, Teams. The
+> virtual-device transport is verified on this host for both a native client (Zoom) and
+> Chrome (Messenger, this document); the per-app unknown in every case is whether the app
+> offers a device picker and honours it.
+
+A Messenger-specific "voice someday" item would now be wrong: the transport is no longer
+unknown, only the device-picker confirmation is.
 
 ## Implementation shape
 
@@ -392,7 +481,9 @@ Registry / repo facts, checked 2026-10-25:
 | Chrome 156.0.8078.47; fake-media switches present; `navigator.webdriver === false` under `--headless=new` | local binary + live probe |
 | Four local loopback probes proving TTS-injection and far-end capture | scripts `/tmp/probe_mic2.py`, `/tmp/probe_call.py`, `/tmp/probe_call2.py`, `/tmp/probe_inject.py`; full command output in `/tmp/det-messenger.log` |
 
-**Not verified:** the shape of Meta's real call signalling payloads; whether the production
-Messenger call is a single peer connection or an SFU; whether `facebook.com/messages`
-tolerates a headless session for long periods without a checkpoint; GitHub star counts for
-the three FCA forks (API rate-limited mid-run); everything that needs a signed-in account.
+**Not verified:** whether Messenger's call UI offers a microphone/speaker picker and whether
+it can be driven programmatically (the one open question for the virtual-device transport);
+the shape of Meta's real call signalling payloads; whether the production Messenger call is a
+single peer connection or an SFU; whether `facebook.com/messages` tolerates a headless
+session for long periods without a checkpoint; GitHub star counts for the three FCA forks
+(API rate-limited mid-run); everything else that needs a signed-in account.
