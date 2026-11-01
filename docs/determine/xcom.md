@@ -252,6 +252,6 @@ A human must decide or provide:
 Everything above is registry data, published source, vendor/maintainer documentation, or a
 local probe of an installed package. **No live X session, read, send, DM or call exists in this
 record**, and the full evidence dump — including what was destroyed by a reboot and what was
-never re-verified — is preserved at `../mycord-xcom/docs/xcom-research-notes.md` in the child
-worktree. The template `## Decision` sentence is gone from this file, so this is a conclusion,
-not a scaffold.
+never re-verified — is preserved beside this file as
+[`xcom-research-notes.md`](xcom-research-notes.md). The template `## Decision` sentence is gone
+from this file, so this is a conclusion, not a scaffold.

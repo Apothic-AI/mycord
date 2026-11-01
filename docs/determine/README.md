@@ -14,11 +14,18 @@ no-app-registration way to drive this platform from an agent, and is voice
 | X / Twitter | [xcom.md](xcom.md) | **possible in principle, unbuildable now** — one AGPL-3.0 library, unproven live |
 | Zoom | [zoom.md](zoom.md) | **verified full duplex** — PipeWire virtual devices; shipped as `mycord-zoom-skill/` |
 
-Also here:
+Also here — the evidence behind the determinations above, kept beside them so that a later
+re-evaluation does not have to re-derive it:
 
 * [`BRIEF.md`](BRIEF.md) — the shared instructions every determination agent worked to:
   the no-app bar, the ranked candidate classes, the voice criteria, and the evidence
   rules.
+* [`signal-live-state.md`](signal-live-state.md) — the verified state of the linked Signal
+  account as of 2026-10-26: devices, daemon reachability, tunnel pin, what authenticated
+  reads returned.
+* [`xcom-research-notes.md`](xcom-research-notes.md) — the per-candidate research dump behind
+  [`xcom.md`](xcom.md): what was verified and how, what is expected only, and what a reboot
+  destroyed before it could be re-confirmed.
 
 ## Convention
 
